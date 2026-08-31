@@ -109,6 +109,7 @@ class GameScene implements Scene {
   private titlePulse = 0;
   private transitionTimer = 0;
   private upgradeTimer = 0;
+  private resultTimer = 0;
   private shakeFor = 0;
   private hitFlash!: Graphics;
   private minimap!: Graphics;
@@ -371,6 +372,7 @@ class GameScene implements Scene {
     }
     this.updateInfected(dt);
     this.updateHideout(dt);
+    if (this.people.some((a) => a.role === 'hunter')) this.updateDay(dt);
     if (!this.people.some((a) => a.role === 'citizen') && !this.hideout) this.spawnHideout();
   }
 
@@ -413,9 +415,21 @@ class GameScene implements Scene {
     this.floatDamage(h.x, h.y - 120, damage); this.burst(h.x, h.y - 70, 0xffc857, 10);
     this.syncHideout();
     if (h.hp > 0) return;
-    const { x, y, citizens, reward } = h;
+    const { x, y, citizens, reward, kind } = h;
     this.score += reward; h.view.destroy({ children: true }); this.hideout = null;
-    this.burst(x, y - 80, 0xffef8a, 18); this.spawnCitizens(citizens, { x, y });
+    this.burst(x, y - 80, 0xffef8a, 18);
+    const ambush = this.day >= 3 && Math.random() < Math.min(0.6, 0.2 + this.day * 0.05);
+    if (!ambush) this.spawnCitizens(citizens, { x, y });
+    else {
+      const count = kind === 'gold' ? 4 : kind === 'silver' ? 3 : 2;
+      for (let i = 0; i < count; i++) {
+        const a = this.person('hunter', i % 2 ? 'soldier_2' : 'swat_1', 'male', i % 3 ? 'rifle_3_1' : 'meleeweapon_2_2');
+        a.hunterType = i % 3 ? 'ranged' : 'melee'; a.attackVariant = a.hunterType === 'melee' ? 1 : 3;
+        a.x = x + (Math.random() - 0.5) * 90; a.y = y + (Math.random() - 0.5) * 60; a.shotFor = 650;
+      }
+      const warning = this.label(x, y - 190, 34); warning.text = 'POLICE AMBUSH!'; warning.style.fill = 0xff4655;
+      warning.zIndex = 1_200_000; this.view.addChild(warning); this.damageTexts.push({ view: warning, life: 1100 });
+    }
   }
 
   private floatDamage(x: number, y: number, damage: number): void {
@@ -680,17 +694,19 @@ class GameScene implements Scene {
 
   private finish(win: boolean): void {
     this.ended = true; this.dead = !win;
-    const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.72 }); cover.zIndex = 2_000_000;
+    const cover = new Graphics().rect(0, 0, W, H).fill(0x000000); cover.alpha = 0; cover.zIndex = 2_000_000;
+    const card = new Container(); card.zIndex = 2_000_001; card.pivot.set(640, 360); card.position.set(640, 360);
+    card.scale.set(0.72); card.alpha = 0;
     const panel = new Graphics().roundRect(260, 125, 760, 485, 28).fill({ color: 0x101b2c, alpha: 0.96 })
-      .stroke({ color: 0xdce7f5, width: 4, alpha: 0.75 }); panel.zIndex = 2_000_001;
-    const title = this.label(640, 205, 54); title.text = win ? 'YOU SURVIVED' : 'RUN OVER'; title.zIndex = 2_000_002;
+      .stroke({ color: 0xdce7f5, width: 4, alpha: 0.75 });
+    const title = this.label(640, 205, 54); title.text = win ? 'YOU SURVIVED' : 'RUN OVER';
     const finalDay = this.label(640, 305, 32); finalDay.text = `FINAL DAY  ${this.day}`;
     const infected = this.label(640, 360, 32); infected.text = `INFECTED  ${this.bites}`;
     const result = this.label(640, 415, 28); result.text = `SCORE  ${this.score}`;
-    for (const text of [finalDay, infected, result]) text.zIndex = 2_000_002;
+    for (const text of [finalDay, infected, result]) text.alpha = 0;
     const retry = new Graphics().roundRect(350, 485, 270, 78, 16).fill(0xd73547).stroke({ color: 0xffffff, width: 3 });
     const home = new Graphics().roundRect(660, 485, 270, 78, 16).fill(0x263b59).stroke({ color: 0xffffff, width: 3 });
-    retry.zIndex = home.zIndex = 2_000_001; retry.eventMode = home.eventMode = 'static';
+    retry.eventMode = home.eventMode = 'none';
     retry.cursor = home.cursor = 'pointer';
     retry.on('pointerdown', () => {
       sessionStorage.setItem('limitless-retry', '1'); location.reload();
@@ -700,13 +716,27 @@ class GameScene implements Scene {
     });
     const retryText = this.label(485, 524, 26); retryText.text = 'RETRY';
     const homeText = this.label(795, 524, 26); homeText.text = 'TITLE';
-    retryText.zIndex = homeText.zIndex = 2_000_002; retryText.eventMode = homeText.eventMode = 'none';
-    this.view.addChild(cover, panel, title, finalDay, infected, result, retry, home, retryText, homeText);
+    retryText.eventMode = homeText.eventMode = 'none';
+    card.addChild(panel, title, finalDay, infected, result, retry, home, retryText, homeText);
+    this.view.addChild(cover, card);
+    let elapsed = 0;
+    this.resultTimer = window.setInterval(() => {
+      elapsed += 30; cover.alpha = Math.min(0.72, elapsed / 700);
+      card.alpha = Math.min(1, Math.max(0, (elapsed - 180) / 420));
+      card.scale.set(0.72 + 0.28 * Math.min(1, Math.max(0, (elapsed - 180) / 420)));
+      finalDay.alpha = Math.min(1, Math.max(0, (elapsed - 600) / 180));
+      infected.alpha = Math.min(1, Math.max(0, (elapsed - 760) / 180));
+      result.alpha = Math.min(1, Math.max(0, (elapsed - 920) / 180));
+      if (elapsed < 1150) return;
+      window.clearInterval(this.resultTimer); this.resultTimer = 0;
+      retry.eventMode = home.eventMode = 'static';
+    }, 30);
   }
 
   onExit(): void {
     if (this.transitionTimer) window.clearInterval(this.transitionTimer);
     if (this.upgradeTimer) window.clearInterval(this.upgradeTimer);
+    if (this.resultTimer) window.clearInterval(this.resultTimer);
   }
 
   private makeHud(): void {
