@@ -399,7 +399,8 @@ class GameScene implements Scene {
     this.lobby?.destroy({ children: true });
     const lobby = new Container(); lobby.zIndex = 3_000_000;
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x07101d, alpha: 0.94 });
-    cover.eventMode = 'static'; lobby.addChild(cover);
+    const resume = () => { lobby.destroy({ children: true }); this.lobby = null; };
+    cover.eventMode = 'static'; cover.on('pointerdown', resume); lobby.addChild(cover);
     const heading = this.label(640, 105, 44); heading.text = title;
     const wallet = this.label(640, 160, 24); wallet.text = `UPGRADE POINTS · ${this.score}`;
     lobby.addChild(heading, wallet);
@@ -413,22 +414,22 @@ class GameScene implements Scene {
       const card = new Graphics().roundRect(x - 155, 220, 310, 250, 22)
         .fill({ color, alpha: 0.65 }).stroke({ color: 0xffffff, width: 3, alpha: 0.55 });
       card.eventMode = 'static'; card.cursor = 'pointer';
-      card.on('pointertap', () => this.buyUpgrade(key, title));
+      card.on('pointerdown', () => this.buyUpgrade(key, title));
       const nameText = this.label(x, 275, 31); nameText.text = name;
       const levelText = this.label(x, 338, 25); levelText.text = `LEVEL ${level}/5`;
       const detailText = this.label(x, 390, 17); detailText.text = detail;
       const costText = this.label(x, 438, 22);
       costText.text = level >= 5 ? 'MAX' : `${cost} PTS`;
       costText.style.fill = level >= 5 || this.score >= cost ? 0xffffff : 0xff7777;
+      for (const text of [nameText, levelText, detailText, costText]) text.eventMode = 'none';
       lobby.addChild(card, nameText, levelText, detailText, costText);
     });
     const start = new Graphics().roundRect(490, 535, 300, 82, 18)
       .fill(0xd73547).stroke({ color: 0xffffff, width: 4 });
-    start.eventMode = 'static'; start.cursor = 'pointer'; start.on('pointertap', () => {
-      lobby.destroy({ children: true }); this.lobby = null;
-    });
+    start.eventMode = 'static'; start.cursor = 'pointer'; start.on('pointerdown', resume);
     const startText = this.label(640, 576, 30);
     startText.text = title === 'NIGHT 1 · THE HUNT BEGINS' ? 'START' : 'CONTINUE';
+    startText.eventMode = 'none';
     lobby.addChild(start, startText); this.lobby = lobby; this.view.addChild(lobby);
   }
 
@@ -460,11 +461,11 @@ class GameScene implements Scene {
     this.joyKnob = this.ctx.assets.makeSprite('joyKnob', { scale: 0.75 }); this.joyKnob.visible = false;
     const roll = new Graphics().circle(1050, 590, 54).fill({ color: 0x197b9b, alpha: 0.9 })
       .circle(1050, 590, 48).stroke({ color: 0x9defff, width: 4 });
-    roll.eventMode = 'static'; roll.cursor = 'pointer'; roll.on('pointertap', () => this.useRoll());
+    roll.eventMode = 'static'; roll.cursor = 'pointer'; roll.on('pointerdown', () => this.useRoll());
     this.rollText = this.label(1050, 590, 18); this.rollText.text = 'SLIDE';
     const dash = new Graphics().circle(1170, 590, 54).fill({ color: 0x9b4b19, alpha: 0.9 })
       .circle(1170, 590, 48).stroke({ color: 0xffd49d, width: 4 });
-    dash.eventMode = 'static'; dash.cursor = 'pointer'; dash.on('pointertap', () => this.useDash());
+    dash.eventMode = 'static'; dash.cursor = 'pointer'; dash.on('pointerdown', () => this.useDash());
     this.dashText = this.label(1170, 590, 18); this.dashText.text = 'DASH';
     const hud = [panel, this.moon, this.sun, this.phaseText, this.timer, track, this.fill,
       this.scoreText, this.status, help, roll, this.rollText, dash, this.dashText, this.joyBase, this.joyKnob];
