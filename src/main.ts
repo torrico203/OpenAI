@@ -360,7 +360,9 @@ class GameScene implements Scene {
       if (speed > cap) { a.vx *= cap / speed; a.vy *= cap / speed; }
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
       if (a.y < 300 || a.y > H - 35) a.vy *= -1;
-      a.facing = a.vx < 0 ? -1 : 1; a.moving = true; a.doll.view.alpha = a.safeFor ? 0.62 : 1; a.doll.sync(a, dt);
+      a.facing = a.vx < 0 ? -1 : 1; a.moving = true;
+      a.doll.view.alpha = a.safeFor ? (Math.floor(a.safeFor / 90) % 2 ? 0.22 : 1) : 1;
+      a.doll.sync(a, dt);
       if (!a.safeFor && Math.hypot(640 - a.x, this.heroY - a.y) < 58) {
         a.dead = true; a.moving = false; this.attackFor = 380; this.bites++; this.score += 100;
         this.burst(a.x, a.y - 55, 0xff4f63);
@@ -656,18 +658,23 @@ class GameScene implements Scene {
   private finish(win: boolean): void {
     this.ended = true; this.dead = !win;
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.72 }); cover.zIndex = 2_000_000;
-    const title = this.label(640, 300, 54); title.text = win ? 'YOU SURVIVED' : 'HUNTED DOWN'; title.zIndex = 2_000_001;
-    const result = this.label(640, 380, 28); result.text = `SCORE ${this.score}  ·  BITES ${this.bites}`; result.zIndex = 2_000_001;
-    const retry = new Graphics().roundRect(350, 455, 270, 78, 16).fill(0xd73547).stroke({ color: 0xffffff, width: 3 });
-    const home = new Graphics().roundRect(660, 455, 270, 78, 16).fill(0x263b59).stroke({ color: 0xffffff, width: 3 });
+    const panel = new Graphics().roundRect(260, 125, 760, 485, 28).fill({ color: 0x101b2c, alpha: 0.96 })
+      .stroke({ color: 0xdce7f5, width: 4, alpha: 0.75 }); panel.zIndex = 2_000_001;
+    const title = this.label(640, 205, 54); title.text = win ? 'YOU SURVIVED' : 'RUN OVER'; title.zIndex = 2_000_002;
+    const finalDay = this.label(640, 305, 32); finalDay.text = `FINAL DAY  ${this.day}`;
+    const infected = this.label(640, 360, 32); infected.text = `INFECTED  ${this.bites}`;
+    const result = this.label(640, 415, 28); result.text = `SCORE  ${this.score}`;
+    for (const text of [finalDay, infected, result]) text.zIndex = 2_000_002;
+    const retry = new Graphics().roundRect(350, 485, 270, 78, 16).fill(0xd73547).stroke({ color: 0xffffff, width: 3 });
+    const home = new Graphics().roundRect(660, 485, 270, 78, 16).fill(0x263b59).stroke({ color: 0xffffff, width: 3 });
     retry.zIndex = home.zIndex = 2_000_001; retry.eventMode = home.eventMode = 'static';
     retry.cursor = home.cursor = 'pointer';
     retry.on('pointerdown', () => void this.ctx.scenes.change(new GameScene(true)));
     home.on('pointerdown', () => void this.ctx.scenes.change(new GameScene()));
-    const retryText = this.label(485, 494, 26); retryText.text = 'RETRY';
-    const homeText = this.label(795, 494, 26); homeText.text = 'TITLE';
+    const retryText = this.label(485, 524, 26); retryText.text = 'RETRY';
+    const homeText = this.label(795, 524, 26); homeText.text = 'TITLE';
     retryText.zIndex = homeText.zIndex = 2_000_002; retryText.eventMode = homeText.eventMode = 'none';
-    this.view.addChild(cover, title, result, retry, home, retryText, homeText);
+    this.view.addChild(cover, panel, title, finalDay, infected, result, retry, home, retryText, homeText);
   }
 
   onExit(): void {
