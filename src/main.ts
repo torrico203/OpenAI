@@ -146,7 +146,7 @@ class GameScene implements Scene {
     const loading = new Container(); loading.zIndex = 5_000_000;
     const loadingBg = new Graphics().rect(0, 0, W, H).fill(0x08111f);
     const loadingTitle = this.label(640, 205, 46); loadingTitle.text = 'GO LIMITLESS';
-    const loadingText = this.label(640, 535, 21); loadingText.text = 'LOADING 0%';
+    const loadingText = this.label(640, 535, 21); loadingText.text = 'LOADING...';
     const track = new Graphics().roundRect(390, 565, 500, 16, 8).fill(0x1b2b43);
     const bar = new Graphics(); loading.addChild(loadingBg, loadingTitle, loadingText, track, bar);
     this.view.addChild(loading);
@@ -159,14 +159,19 @@ class GameScene implements Scene {
     const cat = new Sprite(), copycat = new Sprite(); cat.anchor.set(0.5); copycat.anchor.set(0.5);
     cat.scale.set(0.9); copycat.scale.set(0.52); cat.position.set(1120, 450); copycat.position.set(1360, 415);
     loading.addChild(cat, copycat);
-    let loadingFrame = 0;
+    let loadingFrame = 0, visualProgress = 0;
     const loadingTimer = window.setInterval(() => {
       const frame = loadingFrame++ % 8;
-      cat.texture = new Texture({ source: catTex.source, frame: new Rectangle(frame * 150, 0, 150, 150) });
-      copycat.texture = new Texture({ source: copyTex.source,
-        frame: new Rectangle(frame % 4 * 400, Math.floor(frame / 4) * 400, 400, 400) });
-      cat.x -= 18; copycat.x -= 18;
-      if (cat.x < -180) { cat.x = 1350; copycat.x = 1590; }
+      const text = `LOADING${'.'.repeat(frame % 3 + 1)}`;
+      visualProgress = Math.min(0.9, visualProgress + 0.004);
+      if (!loading.destroyed) {
+        cat.texture = new Texture({ source: catTex.source, frame: new Rectangle(frame * 150, 0, 150, 150) });
+        copycat.texture = new Texture({ source: copyTex.source,
+          frame: new Rectangle(frame % 4 * 400, Math.floor(frame / 4) * 400, 400, 400) });
+        cat.x -= 18; copycat.x -= 18;
+        if (cat.x < -180) { cat.x = 1350; copycat.x = 1590; }
+        bar.clear().roundRect(392, 567, 496 * visualProgress, 12, 6).fill(0xe54858); loadingText.text = text;
+      } else if (this.startRequested && this.titlePrompt) this.titlePrompt.text = text;
     }, 90);
     for (const name of ['bgm', 'infect', 'hurt', 'ui', 'slide', 'dash']) {
       const sound = new Audio(assetUrl(`assets/audio/${name}.mp3`)); sound.preload = 'auto';
@@ -174,7 +179,7 @@ class GameScene implements Scene {
     }
     this.audio.bgm!.loop = true; this.audio.bgm!.volume = 0.22;
     if (!this.skipTitle) {
-      window.clearInterval(loadingTimer); loading.destroy({ children: true }); this.showTitle();
+      loading.destroy({ children: true }); this.showTitle();
     }
     this.rig = await fetch(assetUrl('assets/player/rig/rig.json')).then((r) => r.json()) as RigManifest;
     const manifest: Record<string, string> = {
@@ -193,14 +198,9 @@ class GameScene implements Scene {
     for (const kind of ['citizen', 'student', 'police', 'doctor'])
       for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
         manifest[`infected_${kind}_${state}`] = assetUrl(`assets/infected/${kind}/${state}.png`);
-    await ctx.assets.load(manifest, ({ loaded, total }) => {
-      const ratio = loaded / total;
-      if (this.skipTitle) {
-        bar.clear().roundRect(392, 567, 496 * ratio, 12, 6).fill(0xe54858);
-        loadingText.text = `LOADING ${Math.round(ratio * 100)}%`;
-      } else if (this.startRequested && this.titlePrompt) this.titlePrompt.text = `LOADING ${Math.round(ratio * 100)}%`;
-    });
-    if (this.skipTitle) { window.clearInterval(loadingTimer); loading.destroy({ children: true }); }
+    await ctx.assets.load(manifest);
+    window.clearInterval(loadingTimer);
+    if (this.skipTitle) loading.destroy({ children: true });
 
     const theme = Math.floor(Math.random() * 3);
     const layers = theme === 0 ? [['far', 0.25, -300], ['mid', 0.55, -200], ['near', 1, -100]] as const
