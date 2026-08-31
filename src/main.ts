@@ -168,7 +168,7 @@ class GameScene implements Scene {
       hideoutBronze: assetUrl('assets/hideout/bronze.png'), hideoutSilver: assetUrl('assets/hideout/silver.png'),
       hideoutGold: assetUrl('assets/hideout/gold.png'),
     };
-    for (let i = 0; i < 8; i++) manifest[`pd_atlas_${i}`] = assetUrl(`assets/player/rig/atlas-${i}.png`);
+    for (let i = 0; i < 8; i++) manifest[`pd_atlas_${i}`] = assetUrl(`assets/player/rig/atlas-${i}.webp`);
     for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
       manifest[`z_${state}`] = assetUrl(`assets/zombie-hero/monster17_${state}.png`);
     for (const kind of ['citizen', 'student', 'police', 'doctor'])
