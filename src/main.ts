@@ -60,6 +60,7 @@ class ZombieView {
 
 class GameScene implements Scene {
   readonly view = new Container();
+  constructor(private readonly skipTitle = false) {}
   private ctx!: EngineContext;
   private rig!: RigManifest;
   private hero!: ZombieView;
@@ -92,6 +93,9 @@ class GameScene implements Scene {
   private rollButton!: Graphics;
   private dashButton!: Graphics;
   private lobby: Container | null = null;
+  private titlePrompt: Text | null = null;
+  private titlePulse = 0;
+  private transitionTimer = 0;
   private upgrades = { run: 0, slide: 0, dash: 0 };
   private phaseText!: Text;
   private timer!: Text;
@@ -122,7 +126,7 @@ class GameScene implements Scene {
     });
     const catTex = ctx.assets.get('loadingCat'), copyTex = ctx.assets.get('loadingCopycat');
     const cat = new Sprite(), copycat = new Sprite(); cat.anchor.set(0.5); copycat.anchor.set(0.5);
-    cat.scale.set(0.9); copycat.scale.set(0.32); cat.position.set(545, 450); copycat.position.set(710, 425);
+    cat.scale.set(0.9); copycat.scale.set(0.52); cat.position.set(1120, 450); copycat.position.set(1360, 415);
     loading.addChild(cat, copycat);
     let loadingFrame = 0;
     const loadingTimer = window.setInterval(() => {
@@ -130,6 +134,8 @@ class GameScene implements Scene {
       cat.texture = new Texture({ source: catTex.source, frame: new Rectangle(frame * 150, 0, 150, 150) });
       copycat.texture = new Texture({ source: copyTex.source,
         frame: new Rectangle(frame % 4 * 400, Math.floor(frame / 4) * 400, 400, 400) });
+      cat.x -= 18; copycat.x -= 18;
+      if (cat.x < -180) { cat.x = 1350; copycat.x = 1590; }
     }, 90);
     this.rig = await fetch(assetUrl('assets/player/rig/rig.json')).then((r) => r.json()) as RigManifest;
     const manifest: Record<string, string> = {
@@ -138,9 +144,7 @@ class GameScene implements Scene {
       panel: assetUrl('assets/ui/panel.png'), track: assetUrl('assets/ui/gauge_track.png'),
       fill: assetUrl('assets/ui/gauge_fill.png'), moon: assetUrl('assets/ui/menu_night.png'),
       joyBase: assetUrl('assets/ui/joy_base.png'), joyKnob: assetUrl('assets/ui/joy_knob.png'),
-      titleBg: assetUrl('assets/title/main-bg.png'), titleLogo: assetUrl('assets/title/logo.png'),
-      titleBack: assetUrl('assets/title/title_back_zombie.png'), titleActor: assetUrl('assets/title/title_actor.png'),
-      titleFore: assetUrl('assets/title/title_fore_zombie.png'), titleFront: assetUrl('assets/title/title_front_zombie.png'),
+      titleScreen: assetUrl('assets/title/title-screen.jpg'),
     };
     for (let i = 0; i < 8; i++) manifest[`pd_atlas_${i}`] = assetUrl(`assets/player/rig/atlas-${i}.png`);
     for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
@@ -169,11 +173,15 @@ class GameScene implements Scene {
     this.makeHud();
     this.spawnCitizens();
     this.drawHud();
-    this.showTitle();
+    if (this.skipTitle) this.showLobby('NIGHT 1 · THE HUNT BEGINS'); else this.showTitle();
   }
 
   update(dt: number): void {
     if (this.lobby) {
+      if (this.titlePrompt) {
+        this.titlePulse += dt;
+        this.titlePrompt.alpha = 0.45 + Math.sin(this.titlePulse / 260) * 0.35;
+      }
       this.hero.sync(640, this.heroY, this.facing, 'idle', dt);
       this.drawHud();
       return;
@@ -429,35 +437,46 @@ class GameScene implements Scene {
   private swapPhase(): void {
     this.elapsed = 0; this.clearPeople();
     if (this.phase === 'night') {
-      this.phase = 'day'; this.spawnHunters(); this.showLobby(`DAY ${this.day} · SURVIVE`); return;
+      this.phase = 'day'; this.spawnHunters(); this.showTransition(`DAY ${this.day}`, false); return;
     }
     this.score += 500;
     if (this.day >= LAST) this.finish(true);
     else {
-      this.day++; this.phase = 'night'; this.spawnCitizens(); this.showLobby(`NIGHT ${this.day} · HUNT`);
+      this.day++; this.phase = 'night'; this.spawnCitizens(); this.showTransition(`NIGHT ${this.day}`, true);
     }
+  }
+
+  private showTransition(label: string, night: boolean): void {
+    const fx = new Container(); fx.zIndex = 4_500_000;
+    const bg = new Graphics().rect(0, 0, W, H).fill(night ? 0x071426 : 0x83c9ff);
+    const orb = new Graphics().circle(640, 270, 74).fill(night ? 0xe8efff : 0xffd54a);
+    if (night) orb.circle(670, 245, 72).fill(0x071426);
+    const text = this.label(640, 430, 58); text.text = label;
+    const sub = this.label(640, 495, 24); sub.text = night ? 'THE HUNT BEGINS' : 'THE HUNTERS ARE COMING';
+    fx.addChild(bg, orb, text, sub); fx.alpha = 0; this.lobby = fx; this.view.addChild(fx);
+    let elapsed = 0;
+    this.transitionTimer = window.setInterval(() => {
+      elapsed += 30; fx.alpha = Math.sin(Math.min(1, elapsed / 900) * Math.PI);
+      if (elapsed < 900) return;
+      window.clearInterval(this.transitionTimer); this.transitionTimer = 0;
+      fx.destroy({ children: true }); this.lobby = null;
+      this.showLobby(`${label} · ${night ? 'HUNT' : 'SURVIVE'}`);
+    }, 30);
   }
 
   private showTitle(): void {
     const title = new Container(); title.zIndex = 4_000_000;
-    for (const alias of ['titleBg', 'titleBack', 'titleActor', 'titleFore', 'titleFront']) {
-      const sprite = new Sprite(this.ctx.assets.get(alias));
-      const scale = Math.max(W / sprite.texture.width, H / sprite.texture.height);
-      sprite.anchor.set(0.5); sprite.position.set(W / 2, H / 2); sprite.scale.set(scale);
-      title.addChild(sprite);
-    }
-    title.addChild(new Graphics().rect(0, 0, W, H).fill({ color: 0x050912, alpha: 0.42 }));
-    const name = this.label(640, 210, 72); name.text = 'LIMITLESS ZOMBIE';
-    name.style.fill = 0xffe8dc; name.style.stroke = { color: 0x4b0710, width: 10 };
-    const tag = this.label(640, 290, 24); tag.text = 'BITE BY NIGHT · RUN BY DAY';
-    const start = new Graphics().roundRect(490, 490, 300, 86, 20)
-      .fill(0xd73547).stroke({ color: 0xffffff, width: 4 });
-    const startText = this.label(640, 533, 31); startText.text = 'START GAME'; startText.eventMode = 'none';
+    const art = new Sprite(this.ctx.assets.get('titleScreen'));
+    art.width = W; art.height = H; title.addChild(art);
+    const hit = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.001 });
+    this.titlePrompt = this.label(640, 670, 34); this.titlePrompt.text = 'TOUCH TO START';
+    this.titlePrompt.style.fill = 0xffffff; this.titlePrompt.eventMode = 'none';
     const begin = () => {
-      title.destroy({ children: true }); this.lobby = null; this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+      this.titlePrompt = null; title.destroy({ children: true }); this.lobby = null;
+      this.showLobby('NIGHT 1 · THE HUNT BEGINS');
     };
-    start.eventMode = 'static'; start.cursor = 'pointer'; start.on('pointerdown', begin);
-    title.addChild(name, tag, start, startText); this.lobby = title; this.view.addChild(title);
+    hit.eventMode = 'static'; hit.cursor = 'pointer'; hit.on('pointerdown', begin);
+    title.addChild(hit, this.titlePrompt); this.lobby = title; this.view.addChild(title);
   }
 
   private showLobby(title: string): void {
@@ -468,7 +487,11 @@ class GameScene implements Scene {
     cover.eventMode = 'static'; cover.on('pointerdown', resume); lobby.addChild(cover);
     const heading = this.label(640, 105, 44); heading.text = title;
     const wallet = this.label(640, 160, 24); wallet.text = `UPGRADE POINTS · ${this.score}`;
-    lobby.addChild(heading, wallet);
+    const close = new Graphics().circle(1200, 68, 34).fill(0x712331)
+      .circle(1200, 68, 30).stroke({ color: 0xffffff, width: 3 });
+    close.eventMode = 'static'; close.cursor = 'pointer'; close.on('pointerdown', resume);
+    const closeText = this.label(1200, 66, 34); closeText.text = '×'; closeText.eventMode = 'none';
+    lobby.addChild(heading, wallet, close, closeText);
     const choices = [
       ['run', 'RUN', 'MOVE SPEED +10%', 0x3c9f63],
       ['slide', 'SLIDE', 'LONGER · COOLDOWN ↓', 0x197b9b],
@@ -509,7 +532,20 @@ class GameScene implements Scene {
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.72 }); cover.zIndex = 2_000_000;
     const title = this.label(640, 300, 54); title.text = win ? 'YOU SURVIVED' : 'HUNTED DOWN'; title.zIndex = 2_000_001;
     const result = this.label(640, 380, 28); result.text = `SCORE ${this.score}  ·  BITES ${this.bites}`; result.zIndex = 2_000_001;
-    this.view.addChild(cover, title, result);
+    const retry = new Graphics().roundRect(350, 455, 270, 78, 16).fill(0xd73547).stroke({ color: 0xffffff, width: 3 });
+    const home = new Graphics().roundRect(660, 455, 270, 78, 16).fill(0x263b59).stroke({ color: 0xffffff, width: 3 });
+    retry.zIndex = home.zIndex = 2_000_001; retry.eventMode = home.eventMode = 'static';
+    retry.cursor = home.cursor = 'pointer';
+    retry.on('pointerdown', () => void this.ctx.scenes.change(new GameScene(true)));
+    home.on('pointerdown', () => void this.ctx.scenes.change(new GameScene()));
+    const retryText = this.label(485, 494, 26); retryText.text = 'RETRY';
+    const homeText = this.label(795, 494, 26); homeText.text = 'TITLE';
+    retryText.zIndex = homeText.zIndex = 2_000_002; retryText.eventMode = homeText.eventMode = 'none';
+    this.view.addChild(cover, title, result, retry, home, retryText, homeText);
+  }
+
+  onExit(): void {
+    if (this.transitionTimer) window.clearInterval(this.transitionTimer);
   }
 
   private makeHud(): void {
