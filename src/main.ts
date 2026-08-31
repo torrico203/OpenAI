@@ -107,6 +107,8 @@ class GameScene implements Scene {
   private lobby: Container | null = null;
   private titlePrompt: Text | null = null;
   private titleView: Container | null = null;
+  private titleLoadTrack: Graphics | null = null;
+  private titleLoadBar: Graphics | null = null;
   private assetsReady = false;
   private startRequested = false;
   private titlePulse = 0;
@@ -171,7 +173,10 @@ class GameScene implements Scene {
         cat.x -= 18; copycat.x -= 18;
         if (cat.x < -180) { cat.x = 1350; copycat.x = 1590; }
         bar.clear().roundRect(392, 567, 496 * visualProgress, 12, 6).fill(0xe54858); loadingText.text = text;
-      } else if (this.startRequested && this.titlePrompt) this.titlePrompt.text = text;
+      } else if (this.startRequested && this.titlePrompt) {
+        this.titlePrompt.text = text;
+        this.titleLoadBar?.clear().roundRect(392, 688, 496 * visualProgress, 12, 6).fill(0xe54858);
+      }
     }, 90);
     for (const name of ['bgm', 'infect', 'hurt', 'ui', 'slide', 'dash']) {
       const sound = new Audio(assetUrl(`assets/audio/${name}.mp3`)); sound.preload = 'auto';
@@ -634,21 +639,27 @@ class GameScene implements Scene {
     const art = new Sprite(this.ctx.assets.get('titleScreen'));
     art.width = W; art.height = H; title.addChild(art);
     const hit = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.001 });
-    this.titlePrompt = this.label(640, 670, 34); this.titlePrompt.text = 'TOUCH TO START';
+    this.titlePrompt = this.label(640, 650, 34); this.titlePrompt.text = 'TOUCH TO START';
     this.titlePrompt.style.fill = 0xffffff; this.titlePrompt.eventMode = 'none';
+    this.titleLoadTrack = new Graphics().roundRect(390, 686, 500, 16, 8).fill(0x1b2b43);
+    this.titleLoadBar = new Graphics(); this.titleLoadTrack.visible = this.titleLoadBar.visible = false;
     const begin = () => {
       this.playSound('ui', 0.45); this.startBgm();
       this.startFromTitle();
     };
     hit.eventMode = 'static'; hit.cursor = 'pointer'; hit.on('pointerdown', begin);
-    title.addChild(hit, this.titlePrompt); this.lobby = title; this.view.addChild(title);
+    title.addChild(hit, this.titlePrompt, this.titleLoadTrack, this.titleLoadBar); this.lobby = title; this.view.addChild(title);
   }
 
   private startFromTitle(): void {
     if (!this.assetsReady) {
-      this.startRequested = true; if (this.titlePrompt) this.titlePrompt.text = 'LOADING...'; return;
+      this.startRequested = true; if (this.titlePrompt) this.titlePrompt.text = 'LOADING...';
+      if (this.titleLoadTrack) this.titleLoadTrack.visible = true;
+      if (this.titleLoadBar) this.titleLoadBar.visible = true;
+      return;
     }
-    this.titlePrompt = null; this.titleView?.destroy({ children: true }); this.titleView = null; this.lobby = null;
+    this.titlePrompt = null; this.titleLoadTrack = null; this.titleLoadBar = null;
+    this.titleView?.destroy({ children: true }); this.titleView = null; this.lobby = null;
     if (sessionStorage.getItem('limitless-intro-seen')) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
     else this.showIntro();
   }
