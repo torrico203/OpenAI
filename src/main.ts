@@ -3,19 +3,20 @@ import { Container, Graphics, Rectangle, Sprite, Text, Texture, TilingSprite } f
 import { PaperDollView, type DollActor, type RigManifest } from './PaperDoll';
 import './style.css';
 
-const W = 1280, H = 720, NIGHT = 40_000, DAY = 50_000, LAST = 3;
+const W = 1280, H = 720, NIGHT = 40_000, DAY = 50_000;
 type Phase = 'night' | 'day';
 type ZombieState = 'idle' | 'walk' | 'attack' | 'damaged' | 'death';
 type Person = DollActor & {
   doll: PaperDollView; vx: number; vy: number; role: 'citizen' | 'hunter'; deadFor: number; shotFor: number;
-  hunterType: 'ranged' | 'melee';
+  hunterType: 'ranged' | 'melee'; panicFor: number;
 };
 type Infected = { view: ZombieView; x: number; y: number; vx: number; vy: number; facing: number };
 type Bullet = { view: Graphics; x: number; y: number; vx: number; vy: number };
 type Fx = { view: Graphics; life: number; max: number };
 type Hideout = { view: Container; sprite: Sprite; hpText: Text; x: number; y: number; hp: number; maxHp: number;
-  kind: 'bronze' | 'silver' | 'gold'; reward: number; citizens: number };
+  kind: 'bronze' | 'silver' | 'gold'; reward: number; citizens: number; hitFor: number };
 type DamageText = { view: Text; life: number };
+type UpgradeKey = 'run' | 'slide' | 'dash' | 'attack' | 'heal';
 
 class ZombieView {
   readonly view = new Container();
@@ -52,6 +53,7 @@ class ZombieView {
       this.frame = looping ? (this.frame + 1) % 8 : Math.min(this.frame + 1, 7);
     }
     this.sprite.texture = this.frames[state][this.frame]!;
+    this.sprite.tint = state === 'damaged' ? 0xff4d4d : 0xffffff;
     this.sprite.anchor.set(0.538 + (0.5 - 0.538) * slidePose, 0.916 + (0.5 - 0.916) * slidePose);
     this.sprite.position.y = -48 * slidePose;
     this.sprite.scale.x = this.scale * facing * -1;
@@ -82,6 +84,7 @@ class GameScene implements Scene {
   private bites = 0;
   private score = 0;
   private hp = 3;
+  private readonly maxHp = 3;
   private heroY = 500;
   private facing = 1;
   private moving = false;
@@ -105,6 +108,8 @@ class GameScene implements Scene {
   private titlePrompt: Text | null = null;
   private titlePulse = 0;
   private transitionTimer = 0;
+  private shakeFor = 0;
+  private hitFlash!: Graphics;
   private upgrades = { run: 0, slide: 0, dash: 0, attack: 0 };
   private phaseText!: Text;
   private timer!: Text;
@@ -150,6 +155,7 @@ class GameScene implements Scene {
     const manifest: Record<string, string> = {
       far: assetUrl('assets/field/far.png'), mid: assetUrl('assets/field/mid.png'),
       near: assetUrl('assets/field/near.png'), shadow: assetUrl('assets/field/shadow.png'),
+      town: assetUrl('assets/field/themes/town.png'), street: assetUrl('assets/field/themes/street.png'),
       panel: assetUrl('assets/ui/panel.png'), track: assetUrl('assets/ui/gauge_track.png'),
       fill: assetUrl('assets/ui/gauge_fill.png'), moon: assetUrl('assets/ui/menu_night.png'),
       joyBase: assetUrl('assets/ui/joy_base.png'), joyKnob: assetUrl('assets/ui/joy_knob.png'),
@@ -170,7 +176,10 @@ class GameScene implements Scene {
     });
     window.clearInterval(loadingTimer); loading.destroy({ children: true });
 
-    for (const [alias, effect, z] of [['far', 0.25, -300], ['mid', 0.55, -200], ['near', 1, -100]] as const) {
+    const theme = Math.floor(Math.random() * 3);
+    const layers = theme === 0 ? [['far', 0.25, -300], ['mid', 0.55, -200], ['near', 1, -100]] as const
+      : [[theme === 1 ? 'town' : 'street', 1, -100]] as const;
+    for (const [alias, effect, z] of layers) {
       const texture = ctx.assets.get(alias);
       const sprite = new TilingSprite({ texture, width: W, height: H });
       sprite.tileScale.set(H / texture.height); sprite.zIndex = z;
@@ -180,7 +189,8 @@ class GameScene implements Scene {
     const heroTextures = Object.fromEntries(['idle', 'walk', 'attack', 'damaged', 'death'].map((s) =>
       [s, ctx.assets.get(`z_${s}`)])) as Record<ZombieState, Texture>;
     this.hero = new ZombieView(heroTextures, ctx.assets.get('shadow'));
-    this.view.addChild(this.shade, this.hero.view);
+    this.hitFlash = new Graphics().rect(0, 0, W, H).fill(0xff1f2d); this.hitFlash.alpha = 0; this.hitFlash.zIndex = 999_999;
+    this.view.addChild(this.shade, this.hero.view, this.hitFlash);
     this.makeHud();
     this.spawnCitizens();
     this.drawHud();
@@ -213,6 +223,10 @@ class GameScene implements Scene {
     this.updateBullets(dt);
     this.updateEffects(dt);
     this.updateDamageTexts(dt);
+    this.shakeFor = Math.max(0, this.shakeFor - dt);
+    this.view.position.set(this.shakeFor ? (Math.random() - 0.5) * 10 : 0,
+      this.shakeFor ? (Math.random() - 0.5) * 7 : 0);
+    this.hitFlash.alpha = this.hurtFor > 0 ? Math.min(0.22, this.hurtFor / 700) : 0;
     if (this.ended) {
       this.hero.sync(640, this.heroY, this.facing, this.dead ? 'death' : 'idle', dt);
       return;
@@ -232,7 +246,7 @@ class GameScene implements Scene {
       { top: outfit, bottom: outfit, hat: outfit, shoes: outfit }, weapon);
     const actor: Person = { doll, role, x: 0, y: 0, vx: 0, vy: 0, facing: 1,
       moving: true, dead: false, deadFor: 0, shotFor: Math.random() * 700,
-      hunterType: 'ranged', attackVariant: role === 'hunter' ? 3 : 1,
+      hunterType: 'ranged', panicFor: 0, attackVariant: role === 'hunter' ? 3 : 1,
       attackingFor: 0, attackLoop: false, hurtFor: 0, jumpFor: 0, reloadFor: 0,
       shake: 0, hp: 1, maxHp: 1 };
     this.people.push(actor); this.view.addChild(doll.view); return actor;
@@ -246,11 +260,12 @@ class GameScene implements Scene {
       a.y = origin ? origin.y + (Math.random() - 0.5) * 55 : 320 + Math.random() * 330;
       a.vx = origin ? (Math.random() < 0.5 ? -1 : 1) * (110 + Math.random() * 80) : (Math.random() - 0.5) * 90;
       a.vy = (Math.random() - 0.5) * (origin ? 100 : 55);
+      a.panicFor = origin ? 1500 : 0;
     }
   }
 
   private spawnHunters(): void {
-    const count = Math.min(6, 1 + Math.floor(this.bites / 3));
+    const count = Math.min(12, 2 + this.day + Math.floor(this.bites / 5));
     for (let i = 0; i < count; i++) {
       const melee = i > 0 && i % 3 === 0, swat = i % 2 === 0;
       const a = this.person('hunter', swat ? 'swat_1' : 'soldier_2', 'male', melee
@@ -321,13 +336,14 @@ class GameScene implements Scene {
         continue;
       }
       const dx = a.x - 640, dy = a.y - this.heroY, danger = Math.hypot(dx, dy);
+      a.panicFor = Math.max(0, a.panicFor - dt);
       if (danger < 300) {
         const len = danger || 1;
         a.vx += dx / len * 420 * dt / 1000; a.vy += dy / len * 300 * dt / 1000;
       } else if (Math.random() < 0.008) {
         a.vx += (Math.random() - 0.5) * 80; a.vy += (Math.random() - 0.5) * 50;
       }
-      const speed = Math.hypot(a.vx, a.vy) || 1, cap = danger < 300 ? 175 : 80;
+      const speed = Math.hypot(a.vx, a.vy) || 1, cap = a.panicFor ? 390 : danger < 300 ? 175 : 80;
       if (speed > cap) { a.vx *= cap / speed; a.vy *= cap / speed; }
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
       if (a.y < 300 || a.y > H - 35) a.vy *= -1;
@@ -338,6 +354,7 @@ class GameScene implements Scene {
       }
     }
     this.updateInfected(dt);
+    this.updateHideout(dt);
     if (!this.people.some((a) => a.role === 'citizen') && !this.hideout) this.spawnHideout();
   }
 
@@ -350,8 +367,15 @@ class GameScene implements Scene {
     view.addChild(this.ctx.assets.makeSprite('shadow', { scale: 1.15, y: -4 }), sprite, name, hpText);
     const x = Math.random() < 0.5 ? -180 : W + 180, y = 350 + Math.random() * 270;
     const h: Hideout = { view, sprite, hpText, x, y, hp: stats[0]!, maxHp: stats[0]!, kind,
-      citizens: stats[1]!, reward: stats[2]! };
+      citizens: stats[1]!, reward: stats[2]!, hitFor: 0 };
     view.position.set(x, y); view.zIndex = Math.round(y); this.hideout = h; this.view.addChild(view); this.syncHideout();
+  }
+
+  private updateHideout(dt: number): void {
+    const h = this.hideout; if (!h) return;
+    h.hitFor = Math.max(0, h.hitFor - dt);
+    h.sprite.tint = h.hitFor ? 0xff3535 : 0xffffff;
+    h.view.position.set(h.x + (h.hitFor ? (Math.random() - 0.5) * 12 : 0), h.y);
   }
 
   private syncHideout(): void {
@@ -367,7 +391,8 @@ class GameScene implements Scene {
     this.attackCooldown = 480; this.attackFor = 380;
     const h = this.hideout; if (!h || Math.hypot(640 - h.x, this.heroY - h.y) > 145) return;
     const damage = 1 + this.upgrades.attack;
-    h.hp -= damage; this.floatDamage(h.x, h.y - 120, damage); this.burst(h.x, h.y - 70, 0xffc857, 8);
+    h.hp -= damage; h.hitFor = 160; this.shakeFor = Math.max(this.shakeFor, 90);
+    this.floatDamage(h.x, h.y - 120, damage); this.burst(h.x, h.y - 70, 0xffc857, 10);
     this.syncHideout();
     if (h.hp > 0) return;
     const { x, y, citizens, reward } = h;
@@ -403,10 +428,7 @@ class GameScene implements Scene {
         a.attackingFor = 380; this.shoot(a.x, a.y - 70, dx, dy + 15);
       } else if (melee && len < 68 && a.shotFor <= 0) {
         a.shotFor = 900; a.attackingFor = 420; this.burst(a.x, a.y - 55, 0xff4a4a, 5);
-        if (!this.rollFor && !this.cooldown) {
-          this.hp--; this.cooldown = 900; this.hurtFor = 220;
-          if (!this.hp) this.finish(false);
-        }
+        this.damageHero(1 + Math.floor((this.day - 1) / 5));
       } else a.attackingFor = Math.max(0, a.attackingFor - dt);
       a.facing = dx < 0 ? -1 : 1; a.moving = len > range * 0.8;
       a.doll.sync(a, dt);
@@ -427,16 +449,21 @@ class GameScene implements Scene {
       b.x += b.vx * dt / 1000; b.y += b.vy * dt / 1000; b.view.position.set(b.x, b.y);
       if (Math.hypot(640 - b.x, this.heroY - 55 - b.y) < 38) {
         this.removeBullet(b);
-        if (!this.rollFor && !this.cooldown && !this.ended) {
-          this.hp--; this.cooldown = 900; this.hurtFor = 220; this.burst(640, this.heroY - 55, 0xff3f45);
-          if (!this.hp) this.finish(false);
-        }
+        this.damageHero(1 + Math.floor((this.day - 1) / 5));
       } else if (b.x < -30 || b.x > W + 30 || b.y < 250 || b.y > H + 30) this.removeBullet(b);
     }
   }
 
   private removeBullet(b: Bullet): void {
     const i = this.bullets.indexOf(b); if (i >= 0) this.bullets.splice(i, 1); b.view.destroy();
+  }
+
+  private damageHero(amount: number): void {
+    if (this.rollFor || this.cooldown || this.ended) return;
+    this.hp = Math.max(0, this.hp - amount); this.cooldown = 900; this.hurtFor = 280; this.shakeFor = 230;
+    this.burst(640, this.heroY - 55, 0xff2435, 14);
+    this.floatDamage(640, this.heroY - 120, amount);
+    if (!this.hp) this.finish(false);
   }
 
   private spawnInfected(x: number, y: number): void {
@@ -516,10 +543,9 @@ class GameScene implements Scene {
       this.phase = 'day'; this.spawnHunters(); this.showTransition(`DAY ${this.day}`, false); return;
     }
     this.score += 500;
-    if (this.day >= LAST) this.finish(true);
-    else {
-      this.day++; this.phase = 'night'; this.spawnCitizens(); this.showTransition(`NIGHT ${this.day}`, true);
-    }
+    this.day++; this.phase = 'night';
+    this.spawnCitizens(10, { x: Math.random() < 0.5 ? -180 : W + 180, y: 470 });
+    this.showTransition(`NIGHT ${this.day}`, true);
   }
 
   private showTransition(label: string, night: boolean): void {
@@ -555,7 +581,7 @@ class GameScene implements Scene {
     title.addChild(hit, this.titlePrompt); this.lobby = title; this.view.addChild(title);
   }
 
-  private showLobby(title: string): void {
+  private showLobby(title: string, selected?: UpgradeKey[]): void {
     this.lobby?.destroy({ children: true });
     const lobby = new Container(); lobby.zIndex = 3_000_000;
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x07101d, alpha: 0.94 });
@@ -568,24 +594,28 @@ class GameScene implements Scene {
     close.eventMode = 'static'; close.cursor = 'pointer'; close.on('pointerdown', resume);
     const closeText = this.label(1200, 66, 34); closeText.text = '×'; closeText.eventMode = 'none';
     lobby.addChild(heading, wallet, close, closeText);
-    const choices = [
+    const allChoices: readonly [UpgradeKey, string, string, number][] = [
       ['run', 'RUN', 'MOVE SPEED +10%', 0x3c9f63],
       ['slide', 'SLIDE', 'LONGER · COOLDOWN ↓', 0x197b9b],
       ['dash', 'DASH', 'RANGE ↑ · COOLDOWN ↓', 0x9b4b19],
       ['attack', 'ATTACK', 'HIDEOUT DAMAGE +1', 0x9b2435],
-    ] as const;
+      ['heal', 'RECOVER', 'RESTORE 1 HP', 0x6f3c9f],
+    ];
+    const keys = selected ?? [...allChoices].sort(() => Math.random() - 0.5).slice(0, 3).map(([key]) => key);
+    const choices = keys.map((key) => allChoices.find(([candidate]) => candidate === key)!);
     choices.forEach(([key, name, detail, color], i) => {
-      const level = this.upgrades[key], cost = 200 * (level + 1), x = 170 + i * 313;
-      const card = new Graphics().roundRect(x - 135, 220, 270, 250, 22)
+      const heal = key === 'heal', level = heal ? 0 : this.upgrades[key], cost = heal ? 200 : 200 * (level + 1);
+      const maxed = heal ? this.hp >= this.maxHp : level >= 5, x = 260 + i * 380;
+      const card = new Graphics().roundRect(x - 155, 220, 310, 250, 22)
         .fill({ color, alpha: 0.65 }).stroke({ color: 0xffffff, width: 3, alpha: 0.55 });
       card.eventMode = 'static'; card.cursor = 'pointer';
-      card.on('pointerdown', () => this.buyUpgrade(key, title));
+      card.on('pointerdown', () => this.buyUpgrade(key, title, keys));
       const nameText = this.label(x, 275, 31); nameText.text = name;
-      const levelText = this.label(x, 338, 25); levelText.text = `LEVEL ${level}/5`;
+      const levelText = this.label(x, 338, 25); levelText.text = heal ? `HP ${this.hp}/${this.maxHp}` : `LEVEL ${level}/5`;
       const detailText = this.label(x, 390, 17); detailText.text = detail;
       const costText = this.label(x, 438, 22);
-      costText.text = level >= 5 ? 'MAX' : `${cost} PTS`;
-      costText.style.fill = level >= 5 || this.score >= cost ? 0xffffff : 0xff7777;
+      costText.text = maxed ? 'FULL' : `${cost} PTS`;
+      costText.style.fill = maxed || this.score >= cost ? 0xffffff : 0xff7777;
       for (const text of [nameText, levelText, detailText, costText]) text.eventMode = 'none';
       lobby.addChild(card, nameText, levelText, detailText, costText);
     });
@@ -598,10 +628,14 @@ class GameScene implements Scene {
     lobby.addChild(start, startText); this.lobby = lobby; this.view.addChild(lobby);
   }
 
-  private buyUpgrade(key: 'run' | 'slide' | 'dash' | 'attack', title: string): void {
+  private buyUpgrade(key: UpgradeKey, title: string, selected: UpgradeKey[]): void {
+    if (key === 'heal') {
+      if (this.hp >= this.maxHp || this.score < 200) return;
+      this.score -= 200; this.hp++; this.showLobby(title, selected); this.drawHud(); return;
+    }
     const level = this.upgrades[key], cost = 200 * (level + 1);
     if (level >= 5 || this.score < cost) return;
-    this.score -= cost; this.upgrades[key]++; this.showLobby(title); this.drawHud();
+    this.score -= cost; this.upgrades[key]++; this.showLobby(title, selected); this.drawHud();
   }
 
   private finish(win: boolean): void {
@@ -673,7 +707,7 @@ class GameScene implements Scene {
     this.phaseText.text = this.phase === 'night' ? 'HUNT' : 'SURVIVE';
     this.phaseText.style.fill = left <= 5 ? 0xff655f : 0xffffff;
     this.timer.text = `00:${String(left).padStart(2, '0')}`; this.fill.width = 120 * (1 - this.elapsed / duration);
-    this.scoreText.text = `DAY ${this.day}/${LAST}   SCORE ${this.score}   HP ${'♥'.repeat(this.hp)}`;
+    this.scoreText.text = `DAY ${this.day}   SCORE ${this.score}   HP ${'♥'.repeat(this.hp)}`;
     const hunters = this.people.filter((a) => a.role === 'hunter').length;
     const shelter = this.hideout ? `HIDEOUT ${this.hideout.x < 640 ? '◀' : '▶'}  ·  ` : '';
     this.status.text = this.phase === 'night' ? `${shelter}${this.bites} INFECTED`
