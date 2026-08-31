@@ -7,8 +7,11 @@ const W = 1280, H = 720, NIGHT = 40_000, DAY = 50_000, LAST = 3;
 type Phase = 'night' | 'day';
 type ZombieState = 'idle' | 'walk' | 'attack' | 'damaged' | 'death';
 type Person = DollActor & {
-  doll: PaperDollView; vx: number; vy: number; role: 'citizen' | 'hunter'; deadFor: number;
+  doll: PaperDollView; vx: number; vy: number; role: 'citizen' | 'hunter'; deadFor: number; shotFor: number;
 };
+type Infected = { view: ZombieView; x: number; y: number; vx: number; vy: number; facing: number };
+type Bullet = { view: Graphics; x: number; y: number; vx: number; vy: number };
+type Fx = { view: Graphics; life: number; max: number };
 
 class ZombieView {
   readonly view = new Container();
@@ -35,7 +38,7 @@ class ZombieView {
     this.view.addChild(shade, this.sprite);
   }
 
-  sync(x: number, y: number, facing: number, state: ZombieState, dt: number): void {
+  sync(x: number, y: number, facing: number, state: ZombieState, dt: number, rotation = 0): void {
     if (state !== this.state) { this.state = state; this.frame = 0; this.elapsed = 0; }
     const looping = state === 'idle' || state === 'walk';
     const duration = state === 'attack' ? 70 : state === 'walk' ? 90 : 100;
@@ -47,6 +50,7 @@ class ZombieView {
     this.sprite.texture = this.frames[state][this.frame]!;
     this.sprite.scale.x = this.scale * facing * -1;
     this.view.position.set(x, y);
+    this.view.rotation = rotation;
     this.view.zIndex = Math.round(y);
   }
 }
@@ -59,6 +63,9 @@ class GameScene implements Scene {
   private shade!: Graphics;
   private backgrounds: { sprite: TilingSprite; effect: number }[] = [];
   private people: Person[] = [];
+  private infected: Infected[] = [];
+  private bullets: Bullet[] = [];
+  private effects: Fx[] = [];
   private phase: Phase = 'night';
   private elapsed = 0;
   private day = 1;
@@ -73,6 +80,12 @@ class GameScene implements Scene {
   private dead = false;
   private ended = false;
   private cooldown = 0;
+  private rollFor = 0;
+  private rollCooldown = 0;
+  private dashFor = 0;
+  private dashCooldown = 0;
+  private rollText!: Text;
+  private dashText!: Text;
   private phaseText!: Text;
   private timer!: Text;
   private scoreText!: Text;
@@ -99,6 +112,9 @@ class GameScene implements Scene {
     for (let i = 0; i < 8; i++) manifest[`pd_atlas_${i}`] = assetUrl(`assets/player/rig/atlas-${i}.png`);
     for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
       manifest[`z_${state}`] = assetUrl(`assets/zombie-hero/monster17_${state}.png`);
+    for (const kind of ['citizen', 'student', 'police', 'doctor'])
+      for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
+        manifest[`infected_${kind}_${state}`] = assetUrl(`assets/infected/${kind}/${state}.png`);
     await ctx.assets.load(manifest);
 
     this.view.sortableChildren = true;
@@ -122,6 +138,12 @@ class GameScene implements Scene {
     this.attackFor = Math.max(0, this.attackFor - dt);
     this.hurtFor = Math.max(0, this.hurtFor - dt);
     this.cooldown = Math.max(0, this.cooldown - dt);
+    this.rollFor = Math.max(0, this.rollFor - dt);
+    this.rollCooldown = Math.max(0, this.rollCooldown - dt);
+    this.dashFor = Math.max(0, this.dashFor - dt);
+    this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    this.updateBullets(dt);
+    this.updateEffects(dt);
     if (this.ended) {
       this.hero.sync(640, this.heroY, this.facing, this.dead ? 'death' : 'idle', dt);
       return;
@@ -132,7 +154,8 @@ class GameScene implements Scene {
     if (this.elapsed >= (this.phase === 'night' ? NIGHT : DAY)) this.swapPhase();
     const state: ZombieState = this.dead ? 'death' : this.hurtFor ? 'damaged'
       : this.attackFor ? 'attack' : this.moving ? 'walk' : 'idle';
-    this.hero.sync(640, this.heroY, this.facing, state, dt);
+    this.hero.sync(640, this.heroY, this.facing, state, dt,
+      this.rollFor ? (1 - this.rollFor / 520) * Math.PI * 2 * this.facing : 0);
     this.drawHud();
   }
 
@@ -140,7 +163,7 @@ class GameScene implements Scene {
     const doll = new PaperDollView(this.rig, role === 'hunter' ? 126 : 108, gender,
       { top: outfit, bottom: outfit, hat: outfit, shoes: outfit }, weapon);
     const actor: Person = { doll, role, x: 0, y: 0, vx: 0, vy: 0, facing: 1,
-      moving: true, dead: false, deadFor: 0, attackVariant: role === 'hunter' ? 3 : 1,
+      moving: true, dead: false, deadFor: 0, shotFor: Math.random() * 700, attackVariant: role === 'hunter' ? 3 : 1,
       attackingFor: 0, attackLoop: false, hurtFor: 0, jumpFor: 0, reloadFor: 0,
       shake: 0, hp: 1, maxHp: 1 };
     this.people.push(actor); this.view.addChild(doll.view); return actor;
@@ -159,7 +182,7 @@ class GameScene implements Scene {
     const count = Math.min(6, 1 + Math.floor(this.bites / 3));
     for (let i = 0; i < count; i++) {
       const swat = i % 2 === 0;
-      const a = this.person('hunter', swat ? 'swat_1' : 'soldier_2', i % 2 ? 'female' : 'male',
+      const a = this.person('hunter', swat ? 'swat_1' : 'soldier_2', 'male',
         swat ? 'rifle_3_1' : 'rifle_2_1');
       a.x = i % 2 ? 1210 : 70; a.y = 330 + Math.random() * 290;
     }
@@ -167,11 +190,12 @@ class GameScene implements Scene {
 
   private moveHero(dt: number): void {
     this.updateJoystick();
-    const { x, y } = this.ctx.input.axis();
+    let { x, y } = this.ctx.input.axis();
+    if (Math.hypot(x, y) < 0.05 && (this.rollFor || this.dashFor)) { x = this.facing; y = 0; }
     const len = Math.hypot(x, y);
     this.moving = len > 0.05;
     if (!this.moving) return;
-    const speed = this.phase === 'night' ? 230 : 250;
+    const speed = (this.phase === 'night' ? 230 : 250) * (this.dashFor ? 2.5 : this.rollFor ? 1.65 : 1);
     const mx = x / len * speed * dt / 1000, my = y / len * speed * dt / 1000;
     if (Math.abs(mx) > 0.01) this.facing = mx < 0 ? -1 : 1;
     this.heroY = Math.max(300, Math.min(H - 35, this.heroY + my));
@@ -181,6 +205,12 @@ class GameScene implements Scene {
       if (a.x < -120) a.x += W + 240;
       if (a.x > W + 120) a.x -= W + 240;
     }
+    for (const a of this.infected) {
+      a.x -= mx;
+      if (a.x < -120) a.x += W + 240;
+      if (a.x > W + 120) a.x -= W + 240;
+    }
+    for (const b of this.bullets) b.x -= mx;
   }
 
   private updateJoystick(): void {
@@ -209,16 +239,30 @@ class GameScene implements Scene {
       if (a.role !== 'citizen') continue;
       if (a.dead) {
         a.deadFor += dt; a.doll.sync(a, dt);
-        if (a.deadFor > 900) this.removePerson(a);
+        if (a.deadFor > 700) {
+          const { x, y } = a;
+          this.removePerson(a); this.spawnInfected(x, y); this.burst(x, y, 0x7cff6b);
+        }
         continue;
       }
+      const dx = a.x - 640, dy = a.y - this.heroY, danger = Math.hypot(dx, dy);
+      if (danger < 300) {
+        const len = danger || 1;
+        a.vx += dx / len * 420 * dt / 1000; a.vy += dy / len * 300 * dt / 1000;
+      } else if (Math.random() < 0.008) {
+        a.vx += (Math.random() - 0.5) * 80; a.vy += (Math.random() - 0.5) * 50;
+      }
+      const speed = Math.hypot(a.vx, a.vy) || 1, cap = danger < 300 ? 175 : 80;
+      if (speed > cap) { a.vx *= cap / speed; a.vy *= cap / speed; }
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
       if (a.y < 300 || a.y > H - 35) a.vy *= -1;
       a.facing = a.vx < 0 ? -1 : 1; a.moving = true; a.doll.sync(a, dt);
       if (Math.hypot(640 - a.x, this.heroY - a.y) < 58) {
         a.dead = true; a.moving = false; this.attackFor = 380; this.bites++; this.score += 100;
+        this.burst(a.x, a.y - 55, 0xff4f63);
       }
     }
+    this.updateInfected(dt);
     if (!this.people.some((a) => a.role === 'citizen' && !a.dead)) this.spawnCitizens();
   }
 
@@ -227,14 +271,91 @@ class GameScene implements Scene {
       if (a.role !== 'hunter') continue;
       const dx = 640 - a.x, dy = this.heroY - a.y, len = Math.hypot(dx, dy) || 1;
       const speed = 105 + this.day * 15;
-      a.x += dx / len * speed * dt / 1000; a.y += dy / len * speed * dt / 1000;
-      a.facing = dx < 0 ? -1 : 1; a.moving = len > 55; a.attackingFor = len < 70 ? 180 : 0;
-      a.doll.sync(a, dt);
-      if (len < 58 && !this.cooldown) {
-        this.hp--; this.cooldown = 1200; this.hurtFor = 220;
-        if (!this.hp) this.finish(false);
+      const range = 390;
+      if (len > range * 0.8) {
+        a.x += dx / len * speed * dt / 1000; a.y += dy / len * speed * dt / 1000;
       }
+      a.shotFor -= dt;
+      if (len < range && a.shotFor <= 0) {
+        a.shotFor = 850 + Math.random() * 350;
+        a.attackingFor = 380; this.shoot(a.x, a.y - 70, dx, dy + 15);
+      } else a.attackingFor = Math.max(0, a.attackingFor - dt);
+      a.facing = dx < 0 ? -1 : 1; a.moving = len > range * 0.8;
+      a.doll.sync(a, dt);
     }
+  }
+
+  private shoot(x: number, y: number, dx: number, dy: number): void {
+    const len = Math.hypot(dx, dy) || 1, speed = 560;
+    const view = new Graphics().circle(0, 0, 7).fill(0xffe26a)
+      .circle(0, 0, 13).stroke({ color: 0xff6b35, width: 3, alpha: 0.75 });
+    view.position.set(x, y); view.zIndex = 900_000; this.view.addChild(view);
+    this.bullets.push({ view, x, y, vx: dx / len * speed, vy: dy / len * speed });
+    this.burst(x, y, 0xffd75a, 5);
+  }
+
+  private updateBullets(dt: number): void {
+    for (const b of [...this.bullets]) {
+      b.x += b.vx * dt / 1000; b.y += b.vy * dt / 1000; b.view.position.set(b.x, b.y);
+      if (Math.hypot(640 - b.x, this.heroY - 55 - b.y) < 38) {
+        this.removeBullet(b);
+        if (!this.rollFor && !this.cooldown && !this.ended) {
+          this.hp--; this.cooldown = 900; this.hurtFor = 220; this.burst(640, this.heroY - 55, 0xff3f45);
+          if (!this.hp) this.finish(false);
+        }
+      } else if (b.x < -30 || b.x > W + 30 || b.y < 250 || b.y > H + 30) this.removeBullet(b);
+    }
+  }
+
+  private removeBullet(b: Bullet): void {
+    const i = this.bullets.indexOf(b); if (i >= 0) this.bullets.splice(i, 1); b.view.destroy();
+  }
+
+  private spawnInfected(x: number, y: number): void {
+    const kinds = ['citizen', 'student', 'police', 'doctor'];
+    const kind = kinds[Math.floor(Math.random() * kinds.length)]!;
+    const textures = Object.fromEntries(['idle', 'walk', 'attack', 'damaged', 'death'].map((state) =>
+      [state, this.ctx.assets.get(`infected_${kind}_${state}`)])) as Record<ZombieState, Texture>;
+    const infected: Infected = { view: new ZombieView(textures, this.ctx.assets.get('shadow')),
+      x, y, vx: (Math.random() - 0.5) * 55, vy: (Math.random() - 0.5) * 30, facing: 1 };
+    this.infected.push(infected); this.view.addChild(infected.view.view);
+  }
+
+  private updateInfected(dt: number): void {
+    for (const a of this.infected) {
+      a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
+      if (a.y < 310 || a.y > H - 35) a.vy *= -1;
+      if (Math.random() < 0.004) { a.vx *= -1; a.vy += (Math.random() - 0.5) * 25; }
+      a.facing = a.vx < 0 ? -1 : 1; a.view.sync(a.x, a.y, a.facing, 'walk', dt);
+    }
+  }
+
+  private burst(x: number, y: number, color: number, count = 10): void {
+    const view = new Graphics();
+    for (let i = 0; i < count; i++) {
+      const angle = Math.PI * 2 * i / count, distance = 18 + Math.random() * 30;
+      view.circle(Math.cos(angle) * distance, Math.sin(angle) * distance, 3 + Math.random() * 4).fill(color);
+    }
+    view.circle(0, 0, 28).stroke({ color, width: 5 });
+    view.position.set(x, y); view.zIndex = 950_000; this.view.addChild(view);
+    this.effects.push({ view, life: 420, max: 420 });
+  }
+
+  private updateEffects(dt: number): void {
+    for (const fx of [...this.effects]) {
+      fx.life -= dt; fx.view.alpha = Math.max(0, fx.life / fx.max); fx.view.scale.set(1 + (1 - fx.life / fx.max));
+      if (fx.life <= 0) { this.effects.splice(this.effects.indexOf(fx), 1); fx.view.destroy(); }
+    }
+  }
+
+  private useRoll(): void {
+    if (this.rollCooldown || this.ended) return;
+    this.rollFor = 520; this.rollCooldown = 3600; this.burst(640, this.heroY, 0x7ee8ff, 7);
+  }
+
+  private useDash(): void {
+    if (this.dashCooldown || this.ended) return;
+    this.dashFor = 280; this.dashCooldown = 2400; this.burst(640 - this.facing * 45, this.heroY, 0xffffff, 6);
   }
 
   private removePerson(a: Person): void {
@@ -243,6 +364,9 @@ class GameScene implements Scene {
 
   private clearPeople(): void {
     for (const a of [...this.people]) this.removePerson(a);
+    for (const a of this.infected) a.view.view.destroy({ children: true });
+    this.infected.length = 0;
+    for (const b of [...this.bullets]) this.removeBullet(b);
   }
 
   private swapPhase(): void {
@@ -270,11 +394,19 @@ class GameScene implements Scene {
     this.phaseText = this.label(1170, 116, 24); this.timer = this.label(1170, 154, 31, 'monospace');
     this.scoreText = this.label(24, 28, 25); this.scoreText.anchor.set(0);
     this.status = this.label(640, 650, 25);
-    const help = this.label(640, 690, 18); help.text = 'WASD / ARROWS / LEFT-SIDE TOUCH';
+    const help = this.label(640, 690, 18); help.text = 'MOVE: WASD / ARROWS / LEFT TOUCH';
     this.joyBase = this.ctx.assets.makeSprite('joyBase', { scale: 0.75 }); this.joyBase.visible = false;
     this.joyKnob = this.ctx.assets.makeSprite('joyKnob', { scale: 0.75 }); this.joyKnob.visible = false;
+    const roll = new Graphics().circle(1050, 590, 54).fill({ color: 0x197b9b, alpha: 0.9 })
+      .circle(1050, 590, 48).stroke({ color: 0x9defff, width: 4 });
+    roll.eventMode = 'static'; roll.cursor = 'pointer'; roll.on('pointertap', () => this.useRoll());
+    this.rollText = this.label(1050, 590, 18); this.rollText.text = 'ROLL';
+    const dash = new Graphics().circle(1170, 590, 54).fill({ color: 0x9b4b19, alpha: 0.9 })
+      .circle(1170, 590, 48).stroke({ color: 0xffd49d, width: 4 });
+    dash.eventMode = 'static'; dash.cursor = 'pointer'; dash.on('pointertap', () => this.useDash());
+    this.dashText = this.label(1170, 590, 18); this.dashText.text = 'DASH';
     const hud = [panel, this.moon, this.sun, this.phaseText, this.timer, track, this.fill,
-      this.scoreText, this.status, help, this.joyBase, this.joyKnob];
+      this.scoreText, this.status, help, roll, this.rollText, dash, this.dashText, this.joyBase, this.joyKnob];
     for (const child of hud) child.zIndex = 1_000_000;
     this.view.addChild(...hud);
   }
@@ -297,6 +429,8 @@ class GameScene implements Scene {
     const hunters = this.people.filter((a) => a.role === 'hunter').length;
     this.status.text = this.phase === 'night' ? `BITE THE LIVING  ·  ${this.bites} INFECTED`
       : `${hunters} HUNTERS  ·  SURVIVE UNTIL SUNSET`;
+    this.rollText.text = this.rollCooldown ? `ROLL\n${(this.rollCooldown / 1000).toFixed(1)}` : 'ROLL';
+    this.dashText.text = this.dashCooldown ? `DASH\n${(this.dashCooldown / 1000).toFixed(1)}` : 'DASH';
   }
 }
 
