@@ -48,6 +48,8 @@ class ZombieView {
       this.frame = looping ? (this.frame + 1) % 8 : Math.min(this.frame + 1, 7);
     }
     this.sprite.texture = this.frames[state][this.frame]!;
+    this.sprite.anchor.set(0.538 + (0.5 - 0.538) * slidePose, 0.916 + (0.5 - 0.916) * slidePose);
+    this.sprite.position.y = -48 * slidePose;
     this.sprite.scale.x = this.scale * facing * -1;
     this.sprite.scale.y = this.scale;
     this.sprite.rotation = -Math.PI / 2 * facing * slidePose;
