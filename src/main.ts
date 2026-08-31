@@ -8,7 +8,7 @@ type Phase = 'night' | 'day';
 type ZombieState = 'idle' | 'walk' | 'attack' | 'damaged' | 'death';
 type Person = DollActor & {
   doll: PaperDollView; vx: number; vy: number; role: 'citizen' | 'hunter'; deadFor: number; shotFor: number;
-  hunterType: 'ranged' | 'melee'; panicFor: number;
+  hunterType: 'ranged' | 'melee'; panicFor: number; safeFor: number; dashFor: number; dashCooldown: number;
 };
 type Infected = { view: ZombieView; x: number; y: number; vx: number; vy: number; facing: number };
 type Bullet = { view: Graphics; x: number; y: number; vx: number; vy: number };
@@ -110,6 +110,7 @@ class GameScene implements Scene {
   private transitionTimer = 0;
   private shakeFor = 0;
   private hitFlash!: Graphics;
+  private minimap!: Graphics;
   private upgrades = { run: 0, slide: 0, dash: 0, attack: 0 };
   private phaseText!: Text;
   private timer!: Text;
@@ -246,7 +247,8 @@ class GameScene implements Scene {
       { top: outfit, bottom: outfit, hat: outfit, shoes: outfit }, weapon);
     const actor: Person = { doll, role, x: 0, y: 0, vx: 0, vy: 0, facing: 1,
       moving: true, dead: false, deadFor: 0, shotFor: Math.random() * 700,
-      hunterType: 'ranged', panicFor: 0, attackVariant: role === 'hunter' ? 3 : 1,
+      hunterType: 'ranged', panicFor: 0, safeFor: 0, dashFor: 0, dashCooldown: 5000 + Math.random() * 4000,
+      attackVariant: role === 'hunter' ? 3 : 1,
       attackingFor: 0, attackLoop: false, hurtFor: 0, jumpFor: 0, reloadFor: 0,
       shake: 0, hp: 1, maxHp: 1 };
     this.people.push(actor); this.view.addChild(doll.view); return actor;
@@ -260,7 +262,7 @@ class GameScene implements Scene {
       a.y = origin ? origin.y + (Math.random() - 0.5) * 55 : 320 + Math.random() * 330;
       a.vx = origin ? (Math.random() < 0.5 ? -1 : 1) * (110 + Math.random() * 80) : (Math.random() - 0.5) * 90;
       a.vy = (Math.random() - 0.5) * (origin ? 100 : 55);
-      a.panicFor = origin ? 1500 : 0;
+      a.panicFor = origin ? 1500 : 0; a.safeFor = origin ? 950 : 0;
     }
   }
 
@@ -337,18 +339,29 @@ class GameScene implements Scene {
       }
       const dx = a.x - 640, dy = a.y - this.heroY, danger = Math.hypot(dx, dy);
       a.panicFor = Math.max(0, a.panicFor - dt);
+      a.safeFor = Math.max(0, a.safeFor - dt);
+      a.dashFor = Math.max(0, a.dashFor - dt); a.dashCooldown -= dt;
+      if (danger < 240 && a.dashCooldown <= 0) {
+        a.dashFor = 420; a.dashCooldown = 6000 + Math.random() * 3000;
+        const side = Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? -1 : 1;
+        const ex = dx / (danger || 1), ey = dy / (danger || 1) + side * 0.65, el = Math.hypot(ex, ey) || 1;
+        a.vx = ex / el * 470; a.vy = ey / el * 470;
+      }
       if (danger < 300) {
         const len = danger || 1;
-        a.vx += dx / len * 420 * dt / 1000; a.vy += dy / len * 300 * dt / 1000;
+        const dodgeY = Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? -1 : 1;
+        a.vx += dx / len * 430 * dt / 1000;
+        a.vy += (dy / len * 280 + dodgeY * 210) * dt / 1000;
       } else if (Math.random() < 0.008) {
         a.vx += (Math.random() - 0.5) * 80; a.vy += (Math.random() - 0.5) * 50;
       }
-      const speed = Math.hypot(a.vx, a.vy) || 1, cap = a.panicFor ? 390 : danger < 300 ? 175 : 80;
+      const speed = Math.hypot(a.vx, a.vy) || 1,
+        cap = a.dashFor ? 470 : a.panicFor ? 390 : danger < 300 ? 210 : 80;
       if (speed > cap) { a.vx *= cap / speed; a.vy *= cap / speed; }
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
       if (a.y < 300 || a.y > H - 35) a.vy *= -1;
-      a.facing = a.vx < 0 ? -1 : 1; a.moving = true; a.doll.sync(a, dt);
-      if (Math.hypot(640 - a.x, this.heroY - a.y) < 58) {
+      a.facing = a.vx < 0 ? -1 : 1; a.moving = true; a.doll.view.alpha = a.safeFor ? 0.62 : 1; a.doll.sync(a, dt);
+      if (!a.safeFor && Math.hypot(640 - a.x, this.heroY - a.y) < 58) {
         a.dead = true; a.moving = false; this.attackFor = 380; this.bites++; this.score += 100;
         this.burst(a.x, a.y - 55, 0xff4f63);
       }
@@ -364,7 +377,9 @@ class GameScene implements Scene {
     const view = new Container(), sprite = new Sprite(); sprite.anchor.set(0.5, 1); sprite.scale.set(0.9);
     const name = this.label(0, -190, 23); name.text = `${kind.toUpperCase()} HIDEOUT`;
     const hpText = this.label(0, -154, 20);
-    view.addChild(this.ctx.assets.makeSprite('shadow', { scale: 1.15, y: -4 }), sprite, name, hpText);
+    const shadow = new Sprite(this.ctx.assets.get('shadow')); shadow.anchor.set(0.5); shadow.position.set(0, -5);
+    shadow.width = 120; shadow.height = 22; shadow.alpha = 0.48;
+    view.addChild(shadow, sprite, name, hpText);
     const x = Math.random() < 0.5 ? -180 : W + 180, y = 350 + Math.random() * 270;
     const h: Hideout = { view, sprite, hpText, x, y, hp: stats[0]!, maxHp: stats[0]!, kind,
       citizens: stats[1]!, reward: stats[2]!, hitFor: 0 };
@@ -686,9 +701,10 @@ class GameScene implements Scene {
     attack.eventMode = 'static'; attack.cursor = 'pointer'; attack.on('pointerdown', () => this.useAttack());
     this.attackButton = attack;
     this.attackText = this.label(1110, 455, 18); this.attackText.text = 'ATTACK'; this.attackText.eventMode = 'none';
+    this.minimap = new Graphics();
     const hud = [panel, this.moon, this.sun, this.phaseText, this.timer, track, this.fill,
       this.scoreText, this.status, help, attack, this.attackText, roll, this.rollText, dash, this.dashText,
-      this.joyBase, this.joyKnob];
+      this.minimap, this.joyBase, this.joyKnob];
     for (const child of hud) child.zIndex = 1_000_000;
     this.view.addChild(...hud);
   }
@@ -722,6 +738,22 @@ class GameScene implements Scene {
     this.attackText.text = attackLocked ? 'DAY\nLOCKED' : this.attackCooldown ? `ATTACK\n${(this.attackCooldown / 1000).toFixed(1)}` : 'ATTACK';
     this.attackButton.alpha = attackLocked ? 0.16 : this.attackCooldown ? 0.3 : 1;
     this.attackText.alpha = attackLocked ? 0.28 : this.attackCooldown ? 0.38 : 1;
+    this.drawMinimap();
+  }
+
+  private drawMinimap(): void {
+    const map = this.minimap, x = 20, y = 570, w = 200, h = 125;
+    map.clear().roundRect(x, y, w, h, 10).fill({ color: 0x02060c, alpha: 0.72 })
+      .roundRect(x, y, w, h, 10).stroke({ color: 0x8ca0b8, width: 2, alpha: 0.7 });
+    const dot = (px: number, py: number, color: number, radius = 3): void => {
+      const dx = x + 6 + Math.max(0, Math.min(1, px / W)) * (w - 12);
+      const dy = y + 6 + Math.max(0, Math.min(1, (py - 300) / (H - 335))) * (h - 12);
+      map.circle(dx, dy, radius).fill(color);
+    };
+    for (const a of this.people) if (!a.dead) dot(a.x, a.y, a.role === 'hunter' ? 0xff414d : 0xffffff);
+    for (const a of this.infected) dot(a.x, a.y, 0x5fd35f);
+    if (this.hideout) dot(this.hideout.x, this.hideout.y, 0xffce47, 5);
+    dot(640, this.heroY, 0x39ff87, 5);
   }
 }
 
