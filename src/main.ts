@@ -38,7 +38,7 @@ class ZombieView {
     this.view.addChild(shade, this.sprite);
   }
 
-  sync(x: number, y: number, facing: number, state: ZombieState, dt: number, rotation = 0): void {
+  sync(x: number, y: number, facing: number, state: ZombieState, dt: number, sliding = false): void {
     if (state !== this.state) { this.state = state; this.frame = 0; this.elapsed = 0; }
     const looping = state === 'idle' || state === 'walk';
     const duration = state === 'attack' ? 70 : state === 'walk' ? 90 : 100;
@@ -49,8 +49,9 @@ class ZombieView {
     }
     this.sprite.texture = this.frames[state][this.frame]!;
     this.sprite.scale.x = this.scale * facing * -1;
+    this.sprite.scale.y = this.scale * (sliding ? 0.62 : 1);
+    this.sprite.rotation = sliding ? -0.18 * facing : 0;
     this.view.position.set(x, y);
-    this.view.rotation = rotation;
     this.view.zIndex = Math.round(y);
   }
 }
@@ -86,6 +87,8 @@ class GameScene implements Scene {
   private dashCooldown = 0;
   private rollText!: Text;
   private dashText!: Text;
+  private lobby: Container | null = null;
+  private upgrades = { run: 0, slide: 0, dash: 0 };
   private phaseText!: Text;
   private timer!: Text;
   private scoreText!: Text;
@@ -132,6 +135,7 @@ class GameScene implements Scene {
     this.makeHud();
     this.spawnCitizens();
     this.drawHud();
+    this.showLobby('NIGHT 1 · THE HUNT BEGINS');
   }
 
   update(dt: number): void {
@@ -144,6 +148,11 @@ class GameScene implements Scene {
     this.dashCooldown = Math.max(0, this.dashCooldown - dt);
     this.updateBullets(dt);
     this.updateEffects(dt);
+    if (this.lobby) {
+      this.hero.sync(640, this.heroY, this.facing, 'idle', dt);
+      this.drawHud();
+      return;
+    }
     if (this.ended) {
       this.hero.sync(640, this.heroY, this.facing, this.dead ? 'death' : 'idle', dt);
       return;
@@ -154,8 +163,7 @@ class GameScene implements Scene {
     if (this.elapsed >= (this.phase === 'night' ? NIGHT : DAY)) this.swapPhase();
     const state: ZombieState = this.dead ? 'death' : this.hurtFor ? 'damaged'
       : this.attackFor ? 'attack' : this.moving ? 'walk' : 'idle';
-    this.hero.sync(640, this.heroY, this.facing, state, dt,
-      this.rollFor ? (1 - this.rollFor / 520) * Math.PI * 2 * this.facing : 0);
+    this.hero.sync(640, this.heroY, this.facing, state, dt, this.rollFor > 0);
     this.drawHud();
   }
 
@@ -195,7 +203,9 @@ class GameScene implements Scene {
     const len = Math.hypot(x, y);
     this.moving = len > 0.05;
     if (!this.moving) return;
-    const speed = (this.phase === 'night' ? 230 : 250) * (this.dashFor ? 2.5 : this.rollFor ? 1.65 : 1);
+    const runBonus = 1 + this.upgrades.run * 0.1;
+    const speed = (this.phase === 'night' ? 230 : 250) * runBonus
+      * (this.dashFor ? 2.5 + this.upgrades.dash * 0.25 : this.rollFor ? 1.65 + this.upgrades.slide * 0.12 : 1);
     const mx = x / len * speed * dt / 1000, my = y / len * speed * dt / 1000;
     if (Math.abs(mx) > 0.01) this.facing = mx < 0 ? -1 : 1;
     this.heroY = Math.max(300, Math.min(H - 35, this.heroY + my));
@@ -350,12 +360,16 @@ class GameScene implements Scene {
 
   private useRoll(): void {
     if (this.rollCooldown || this.ended) return;
-    this.rollFor = 520; this.rollCooldown = 3600; this.burst(640, this.heroY, 0x7ee8ff, 7);
+    this.rollFor = 440 + this.upgrades.slide * 60;
+    this.rollCooldown = Math.max(1800, 3400 - this.upgrades.slide * 350);
+    this.burst(640, this.heroY, 0x7ee8ff, 7);
   }
 
   private useDash(): void {
     if (this.dashCooldown || this.ended) return;
-    this.dashFor = 280; this.dashCooldown = 2400; this.burst(640 - this.facing * 45, this.heroY, 0xffffff, 6);
+    this.dashFor = 260 + this.upgrades.dash * 45;
+    this.dashCooldown = Math.max(1200, 2400 - this.upgrades.dash * 250);
+    this.burst(640 - this.facing * 45, this.heroY, 0xffffff, 6);
   }
 
   private removePerson(a: Person): void {
@@ -371,10 +385,57 @@ class GameScene implements Scene {
 
   private swapPhase(): void {
     this.elapsed = 0; this.clearPeople();
-    if (this.phase === 'night') { this.phase = 'day'; this.spawnHunters(); return; }
+    if (this.phase === 'night') {
+      this.phase = 'day'; this.spawnHunters(); this.showLobby(`DAY ${this.day} · SURVIVE`); return;
+    }
     this.score += 500;
     if (this.day >= LAST) this.finish(true);
-    else { this.day++; this.phase = 'night'; this.spawnCitizens(); }
+    else {
+      this.day++; this.phase = 'night'; this.spawnCitizens(); this.showLobby(`NIGHT ${this.day} · HUNT`);
+    }
+  }
+
+  private showLobby(title: string): void {
+    this.lobby?.destroy({ children: true });
+    const lobby = new Container(); lobby.zIndex = 3_000_000;
+    const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x07101d, alpha: 0.94 });
+    cover.eventMode = 'static'; lobby.addChild(cover);
+    const heading = this.label(640, 105, 44); heading.text = title;
+    const wallet = this.label(640, 160, 24); wallet.text = `UPGRADE POINTS · ${this.score}`;
+    lobby.addChild(heading, wallet);
+    const choices = [
+      ['run', 'RUN', 'MOVE SPEED +10%', 0x3c9f63],
+      ['slide', 'SLIDE', 'LONGER · COOLDOWN ↓', 0x197b9b],
+      ['dash', 'DASH', 'RANGE ↑ · COOLDOWN ↓', 0x9b4b19],
+    ] as const;
+    choices.forEach(([key, name, detail, color], i) => {
+      const level = this.upgrades[key], cost = 200 * (level + 1), x = 260 + i * 380;
+      const card = new Graphics().roundRect(x - 155, 220, 310, 250, 22)
+        .fill({ color, alpha: 0.65 }).stroke({ color: 0xffffff, width: 3, alpha: 0.55 });
+      card.eventMode = 'static'; card.cursor = 'pointer';
+      card.on('pointertap', () => this.buyUpgrade(key, title));
+      const nameText = this.label(x, 275, 31); nameText.text = name;
+      const levelText = this.label(x, 338, 25); levelText.text = `LEVEL ${level}/5`;
+      const detailText = this.label(x, 390, 17); detailText.text = detail;
+      const costText = this.label(x, 438, 22);
+      costText.text = level >= 5 ? 'MAX' : `${cost} PTS`;
+      costText.style.fill = level >= 5 || this.score >= cost ? 0xffffff : 0xff7777;
+      lobby.addChild(card, nameText, levelText, detailText, costText);
+    });
+    const start = new Graphics().roundRect(490, 535, 300, 82, 18)
+      .fill(0xd73547).stroke({ color: 0xffffff, width: 4 });
+    start.eventMode = 'static'; start.cursor = 'pointer'; start.on('pointertap', () => {
+      lobby.destroy({ children: true }); this.lobby = null;
+    });
+    const startText = this.label(640, 576, 30);
+    startText.text = title === 'NIGHT 1 · THE HUNT BEGINS' ? 'START' : 'CONTINUE';
+    lobby.addChild(start, startText); this.lobby = lobby; this.view.addChild(lobby);
+  }
+
+  private buyUpgrade(key: 'run' | 'slide' | 'dash', title: string): void {
+    const level = this.upgrades[key], cost = 200 * (level + 1);
+    if (level >= 5 || this.score < cost) return;
+    this.score -= cost; this.upgrades[key]++; this.showLobby(title); this.drawHud();
   }
 
   private finish(win: boolean): void {
@@ -400,7 +461,7 @@ class GameScene implements Scene {
     const roll = new Graphics().circle(1050, 590, 54).fill({ color: 0x197b9b, alpha: 0.9 })
       .circle(1050, 590, 48).stroke({ color: 0x9defff, width: 4 });
     roll.eventMode = 'static'; roll.cursor = 'pointer'; roll.on('pointertap', () => this.useRoll());
-    this.rollText = this.label(1050, 590, 18); this.rollText.text = 'ROLL';
+    this.rollText = this.label(1050, 590, 18); this.rollText.text = 'SLIDE';
     const dash = new Graphics().circle(1170, 590, 54).fill({ color: 0x9b4b19, alpha: 0.9 })
       .circle(1170, 590, 48).stroke({ color: 0xffd49d, width: 4 });
     dash.eventMode = 'static'; dash.cursor = 'pointer'; dash.on('pointertap', () => this.useDash());
@@ -429,7 +490,7 @@ class GameScene implements Scene {
     const hunters = this.people.filter((a) => a.role === 'hunter').length;
     this.status.text = this.phase === 'night' ? `BITE THE LIVING  ·  ${this.bites} INFECTED`
       : `${hunters} HUNTERS  ·  SURVIVE UNTIL SUNSET`;
-    this.rollText.text = this.rollCooldown ? `ROLL\n${(this.rollCooldown / 1000).toFixed(1)}` : 'ROLL';
+    this.rollText.text = this.rollCooldown ? `SLIDE\n${(this.rollCooldown / 1000).toFixed(1)}` : 'SLIDE';
     this.dashText.text = this.dashCooldown ? `DASH\n${(this.dashCooldown / 1000).toFixed(1)}` : 'DASH';
   }
 }
