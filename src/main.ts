@@ -128,6 +128,14 @@ class GameScene implements Scene {
   private joyY = 0;
   private joystickActive = false;
   private audio: Record<string, HTMLAudioElement> = {};
+  private readonly onKeyDown = (event: KeyboardEvent): void => {
+    if (event.repeat || this.lobby || this.ended) return;
+    if (event.code === 'KeyZ') this.useAttack();
+    else if (event.code === 'KeyX') this.useRoll();
+    else if (event.code === 'KeyC') this.useDash();
+    else return;
+    event.preventDefault();
+  };
 
   async onEnter(ctx: EngineContext): Promise<void> {
     this.ctx = ctx;
@@ -202,6 +210,7 @@ class GameScene implements Scene {
     this.hitFlash = new Graphics().rect(0, 0, W, H).fill(0xff1f2d); this.hitFlash.alpha = 0; this.hitFlash.zIndex = 999_999;
     this.view.addChild(this.shade, this.hero.view, this.hitFlash);
     this.makeHud();
+    window.addEventListener('keydown', this.onKeyDown);
     this.spawnCitizens();
     this.spawnHideout();
     this.drawHud();
@@ -778,6 +787,7 @@ class GameScene implements Scene {
     if (this.resultTimer) window.clearInterval(this.resultTimer);
     if (this.introTimer) window.clearInterval(this.introTimer);
     this.audio.bgm?.pause();
+    window.removeEventListener('keydown', this.onKeyDown);
   }
 
   private makeHud(): void {
@@ -807,9 +817,13 @@ class GameScene implements Scene {
     attack.eventMode = 'static'; attack.cursor = 'pointer'; attack.on('pointerdown', () => this.useAttack());
     this.attackButton = attack;
     this.attackText = this.label(1110, 455, 18); this.attackText.text = 'ATTACK'; this.attackText.eventMode = 'none';
+    const slideKey = this.label(1050, 518, 22); slideKey.text = '[ X ]';
+    const dashKey = this.label(1170, 518, 22); dashKey.text = '[ C ]';
+    const attackKey = this.label(1110, 382, 22); attackKey.text = '[ Z ]';
     this.minimap = new Graphics();
     const hud = [panel, this.moon, this.sun, this.phaseText, this.timer, track, this.fill,
-      this.scoreText, this.status, help, attack, this.attackText, roll, this.rollText, dash, this.dashText,
+      this.scoreText, this.status, help, attack, this.attackText, attackKey, roll, this.rollText, slideKey,
+      dash, this.dashText, dashKey,
       this.minimap, this.joyBase, this.joyKnob];
     for (const child of hud) child.zIndex = 1_000_000;
     this.view.addChild(...hud);
