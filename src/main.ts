@@ -196,6 +196,7 @@ class GameScene implements Scene {
     this.view.addChild(this.shade, this.hero.view, this.hitFlash);
     this.makeHud();
     this.spawnCitizens();
+    this.spawnHideout();
     this.drawHud();
     if (this.skipTitle) this.showLobby('NIGHT 1 · THE HUNT BEGINS'); else this.showTitle();
   }
@@ -449,7 +450,7 @@ class GameScene implements Scene {
       if (a.role !== 'hunter') continue;
       const dx = 640 - a.x, dy = this.heroY - a.y, len = Math.hypot(dx, dy) || 1;
       const melee = a.hunterType === 'melee';
-      const speed = (melee ? 205 : 105) + this.day * 15;
+      const speed = (melee ? 265 : 105) + this.day * (melee ? 18 : 15);
       const range = melee ? 58 : 390;
       if (len > range * 0.8) {
         a.x += dx / len * speed * dt / 1000; a.y += dy / len * speed * dt / 1000;
@@ -577,6 +578,7 @@ class GameScene implements Scene {
     this.score += 500;
     this.day++; this.phase = 'night';
     this.spawnCitizens(10, { x: Math.random() < 0.5 ? -180 : W + 180, y: 470 });
+    this.spawnHideout();
     this.showTransition(`NIGHT ${this.day}`, true);
   }
 
