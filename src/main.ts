@@ -1,8 +1,8 @@
 import { assetUrl, createEngine, type EngineContext, type Scene } from 'pixiengine';
-import { AnimatedSprite, Container, Graphics, Sprite, Text } from 'pixi.js';
+import { AnimatedSprite, Container, Graphics, Sprite, Text, TilingSprite } from 'pixi.js';
 import './style.css';
 
-const W = 720, H = 1280, NIGHT = 40_000, DAY = 50_000, LAST = 3;
+const W = 1280, H = 720, NIGHT = 40_000, DAY = 50_000, LAST = 3;
 type Actor = AnimatedSprite & { vx: number; vy: number };
 
 class GameScene implements Scene {
@@ -17,6 +17,11 @@ class GameScene implements Scene {
   private fill!: Sprite;
   private moon!: Sprite;
   private sun!: Graphics;
+  private joyBase!: Sprite;
+  private joyKnob!: Sprite;
+  private joyX = 0;
+  private joyY = 0;
+  private joystickActive = false;
   private citizens: Actor[] = [];
   private hunters: Actor[] = [];
   private phase: 'night' | 'day' = 'night';
@@ -31,19 +36,30 @@ class GameScene implements Scene {
   async onEnter(ctx: EngineContext): Promise<void> {
     this.ctx = ctx;
     await ctx.assets.load({
-      street: assetUrl('assets/bg_street.png'),
+      far: assetUrl('assets/field/far.png'),
+      mid: assetUrl('assets/field/mid.png'),
+      near: assetUrl('assets/field/near.png'),
       people: assetUrl('assets/player.json'),
       zombie: assetUrl('assets/zombie.json'),
       panel: assetUrl('assets/ui/panel.png'),
       track: assetUrl('assets/ui/gauge_track.png'),
       fill: assetUrl('assets/ui/gauge_fill.png'),
       moon: assetUrl('assets/ui/menu_night.png'),
+      joyBase: assetUrl('assets/ui/joy_base.png'),
+      joyKnob: assetUrl('assets/ui/joy_knob.png'),
     });
-    const bg = ctx.assets.makeSprite('street', { anchor: 0 });
-    bg.width = W; bg.height = H;
+    this.view.sortableChildren = true;
+    for (const [alias, z] of [['far', -300], ['mid', -200], ['near', -100]] as const) {
+      const texture = ctx.assets.get(alias);
+      const layer = new TilingSprite({ texture, width: W, height: H });
+      layer.tileScale.set(H / texture.height);
+      layer.zIndex = z;
+      this.view.addChild(layer);
+    }
     this.shade = new Graphics().rect(0, 0, W, H).fill(0x071426);
-    this.hero = this.actor('zombie', 360, 700, 0.72);
-    this.view.addChild(bg, this.shade, this.hero);
+    this.shade.zIndex = -50;
+    this.hero = this.actor('zombie', 640, 500, 0.72);
+    this.view.addChild(this.shade, this.hero);
     this.makeHud();
     this.spawnCitizens();
     this.drawHud();
@@ -60,21 +76,27 @@ class GameScene implements Scene {
   }
 
   private makeHud(): void {
-    const panel = this.ctx.assets.makeSprite('panel', { anchor: 0, x: 530, y: 28 });
+    const panel = this.ctx.assets.makeSprite('panel', { anchor: 0, x: 1090, y: 24 });
     panel.width = 160; panel.height = 210;
-    const track = this.ctx.assets.makeSprite('track', { anchor: 0, x: 550, y: 195 });
+    const track = this.ctx.assets.makeSprite('track', { anchor: 0, x: 1110, y: 191 });
     track.width = 120; track.height = 13;
-    this.fill = this.ctx.assets.makeSprite('fill', { anchor: 0, x: 550, y: 195 });
+    this.fill = this.ctx.assets.makeSprite('fill', { anchor: 0, x: 1110, y: 191 });
     this.fill.height = 13;
-    this.moon = this.ctx.assets.makeSprite('moon', { x: 610, y: 76, scale: 0.75 });
-    this.sun = new Graphics().circle(610, 76, 25).fill(0xffd54a);
-    this.phaseText = this.label(610, 120, 24);
-    this.timer = this.label(610, 158, 31, 'monospace');
+    this.moon = this.ctx.assets.makeSprite('moon', { x: 1170, y: 72, scale: 0.75 });
+    this.sun = new Graphics().circle(1170, 72, 25).fill(0xffd54a);
+    this.phaseText = this.label(1170, 116, 24);
+    this.timer = this.label(1170, 154, 31, 'monospace');
     this.scoreText = this.label(24, 28, 25); this.scoreText.anchor.set(0);
-    this.status = this.label(360, 1170, 25);
-    const help = this.label(360, 1220, 18); help.text = 'WASD / ARROWS / HOLD TO MOVE';
+    this.status = this.label(640, 650, 25);
+    const help = this.label(640, 690, 18); help.text = 'WASD / ARROWS / LEFT-SIDE TOUCH';
+    this.joyBase = this.ctx.assets.makeSprite('joyBase', { scale: 0.75 });
+    this.joyKnob = this.ctx.assets.makeSprite('joyKnob', { scale: 0.75 });
+    this.joyBase.visible = false;
+    this.joyKnob.visible = false;
     this.view.addChild(panel, this.moon, this.sun, this.phaseText, this.timer, track,
-      this.fill, this.scoreText, this.status, help);
+      this.fill, this.scoreText, this.status, help, this.joyBase, this.joyKnob);
+    for (const child of [panel, this.moon, this.sun, this.phaseText, this.timer, track,
+      this.fill, this.scoreText, this.status, help, this.joyBase, this.joyKnob]) child.zIndex = 1_000_000;
   }
 
   private label(x: number, y: number, size: number, family = 'sans-serif'): Text {
@@ -86,13 +108,13 @@ class GameScene implements Scene {
   private actor(sheet: string, x: number, y: number, scale: number): Actor {
     const a = new AnimatedSprite(this.ctx.assets.getSheet(sheet).animations.move!) as Actor;
     a.anchor.set(0.5); a.position.set(x, y); a.scale.set(scale);
-    a.animationSpeed = 0.14; a.vx = 0; a.vy = 0; a.play(); return a;
+    a.animationSpeed = 0.14; a.vx = 0; a.vy = 0; a.zIndex = Math.round(y); a.play(); return a;
   }
 
   private spawnCitizens(): void {
     const colors = [0xffffff, 0xffd1b3, 0xb8e0ff, 0xffc5dd, 0xd8ffc4, 0xffe59b];
     for (let i = 0; i < 10; i++) {
-      const a = this.actor('people', 70 + Math.random() * 580, 250 + Math.random() * 800, 0.55);
+      const a = this.actor('people', 70 + Math.random() * 1140, 320 + Math.random() * 330, 0.55);
       a.tint = colors[i % colors.length]!;
       a.vx = (Math.random() - 0.5) * 80; a.vy = (Math.random() - 0.5) * 80;
       this.citizens.push(a); this.view.addChild(a);
@@ -102,18 +124,35 @@ class GameScene implements Scene {
   private spawnHunters(): void {
     const count = Math.min(6, 1 + Math.floor(this.bites / 3));
     for (let i = 0; i < count; i++) {
-      const a = this.actor('people', i % 2 ? 650 : 70, 300 + Math.random() * 650, 0.66);
+      const a = this.actor('people', i % 2 ? 1210 : 70, 330 + Math.random() * 290, 0.66);
       a.tint = i === count - 1 && count >= 4 ? 0xffd36b : 0xffffff;
       this.hunters.push(a); this.view.addChild(a);
     }
   }
 
   private moveHero(dt: number): void {
-    let { x, y } = this.ctx.input.axis();
-    if (this.ctx.input.pointer.down) {
+    const pointer = this.ctx.input.pointer;
+    if (pointer.down) {
       const p = this.ctx.toDesign(this.ctx.input.pointer.x, this.ctx.input.pointer.y);
-      x = p.x - this.hero.x; y = p.y - this.hero.y;
+      if (!this.joystickActive && p.x < W * 0.6) {
+        this.joystickActive = true;
+        this.joyX = p.x; this.joyY = p.y;
+        this.joyBase.position.set(p.x, p.y);
+        this.joyKnob.position.set(p.x, p.y);
+        this.joyBase.visible = true; this.joyKnob.visible = true;
+      }
+      if (this.joystickActive) {
+        const dx = p.x - this.joyX, dy = p.y - this.joyY;
+        const len = Math.hypot(dx, dy) || 1, reach = Math.min(len, 52);
+        this.joyKnob.position.set(this.joyX + dx / len * reach, this.joyY + dy / len * reach);
+        this.ctx.input.setJoystick(dx / len * reach / 52, dy / len * reach / 52);
+      }
+    } else if (this.joystickActive) {
+      this.joystickActive = false;
+      this.joyBase.visible = false; this.joyKnob.visible = false;
+      this.ctx.input.setJoystick(0, 0);
     }
+    const { x, y } = this.ctx.input.axis();
     const len = Math.hypot(x, y);
     if (len) {
       const speed = this.phase === 'night' ? 230 : 250;
@@ -122,14 +161,16 @@ class GameScene implements Scene {
       this.hero.scale.x = Math.abs(this.hero.scale.x) * (x < 0 ? -1 : 1);
     }
     this.hero.x = Math.max(35, Math.min(W - 35, this.hero.x));
-    this.hero.y = Math.max(230, Math.min(H - 100, this.hero.y));
+    this.hero.y = Math.max(300, Math.min(H - 35, this.hero.y));
+    this.hero.zIndex = Math.round(this.hero.y);
   }
 
   private updateNight(dt: number): void {
     for (const a of [...this.citizens]) {
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
       if (a.x < 35 || a.x > W - 35) a.vx *= -1;
-      if (a.y < 230 || a.y > H - 100) a.vy *= -1;
+      if (a.y < 300 || a.y > H - 35) a.vy *= -1;
+      a.zIndex = Math.round(a.y);
       if (this.distance(this.hero, a) < 48) {
         this.citizens.splice(this.citizens.indexOf(a), 1); a.destroy();
         this.bites++; this.score += 100;
@@ -144,6 +185,7 @@ class GameScene implements Scene {
       const speed = 105 + this.day * 15;
       a.x += dx / len * speed * dt / 1000; a.y += dy / len * speed * dt / 1000;
       a.scale.x = Math.abs(a.scale.x) * (dx < 0 ? -1 : 1);
+      a.zIndex = Math.round(a.y);
       if (len < 52 && !this.cooldown) {
         this.hp--; this.cooldown = 1200; this.hero.alpha = 0.35;
         setTimeout(() => { if (!this.hero.destroyed) this.hero.alpha = 1; }, 180);
@@ -167,8 +209,10 @@ class GameScene implements Scene {
   private finish(win: boolean): void {
     this.ended = true;
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.78 });
-    const title = this.label(360, 570, 54); title.text = win ? 'YOU SURVIVED' : 'HUNTED DOWN';
-    const result = this.label(360, 650, 28); result.text = `SCORE ${this.score}  ·  BITES ${this.bites}`;
+    cover.zIndex = 2_000_000;
+    const title = this.label(640, 300, 54); title.text = win ? 'YOU SURVIVED' : 'HUNTED DOWN';
+    const result = this.label(640, 380, 28); result.text = `SCORE ${this.score}  ·  BITES ${this.bites}`;
+    title.zIndex = 2_000_001; result.zIndex = 2_000_001;
     this.view.addChild(cover, title, result);
   }
 
