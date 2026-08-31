@@ -127,6 +127,7 @@ class GameScene implements Scene {
   private joyX = 0;
   private joyY = 0;
   private joystickActive = false;
+  private audio: Record<string, HTMLAudioElement> = {};
 
   async onEnter(ctx: EngineContext): Promise<void> {
     this.ctx = ctx;
@@ -178,6 +179,11 @@ class GameScene implements Scene {
       bar.clear().roundRect(392, 567, 496 * ratio, 12, 6).fill(0xe54858);
       loadingText.text = `LOADING ${Math.round(ratio * 100)}%`;
     });
+    for (const name of ['bgm', 'infect', 'hurt', 'ui', 'slide', 'dash']) {
+      const sound = new Audio(assetUrl(`assets/audio/${name}.mp3`)); sound.preload = 'auto';
+      this.audio[name] = sound;
+    }
+    this.audio.bgm!.loop = true; this.audio.bgm!.volume = 0.22;
     window.clearInterval(loadingTimer); loading.destroy({ children: true });
 
     const theme = Math.floor(Math.random() * 3);
@@ -369,7 +375,7 @@ class GameScene implements Scene {
       a.doll.sync(a, dt);
       if (!a.safeFor && Math.hypot(640 - a.x, this.heroY - a.y) < 58) {
         a.dead = true; a.moving = false; this.attackFor = 380; this.bites++; this.score += 100;
-        this.burst(a.x, a.y - 55, 0xff4f63);
+        this.burst(a.x, a.y - 55, 0xff4f63); this.playSound('infect', 0.6);
       }
     }
     this.updateInfected(dt);
@@ -495,6 +501,7 @@ class GameScene implements Scene {
   private damageHero(amount: number): void {
     if (this.rollFor || this.cooldown || this.ended) return;
     this.hp = Math.max(0, this.hp - amount); this.cooldown = 900; this.hurtFor = 280; this.shakeFor = 230;
+    this.playSound('hurt', 0.55);
     this.burst(640, this.heroY - 55, 0xff2435, 14);
     this.floatDamage(640, this.heroY - 120, amount);
     if (!this.hp) this.finish(false);
@@ -547,14 +554,14 @@ class GameScene implements Scene {
     if (this.rollCooldown || this.ended) return;
     this.rollFor = 440 + this.upgrades.slide * 60;
     this.rollCooldown = Math.max(1800, 3400 - this.upgrades.slide * 350);
-    this.burst(640, this.heroY, 0x7ee8ff, 7);
+    this.burst(640, this.heroY, 0x7ee8ff, 7); this.playSound('slide', 0.55);
   }
 
   private useDash(): void {
     if (this.dashCooldown || this.ended) return;
     this.dashFor = 260 + this.upgrades.dash * 45;
     this.dashCooldown = Math.max(1200, 2400 - this.upgrades.dash * 250);
-    this.burst(640 - this.facing * 45, this.heroY, 0xffffff, 6);
+    this.burst(640 - this.facing * 45, this.heroY, 0xffffff, 6); this.playSound('dash', 0.6);
   }
 
   private removePerson(a: Person): void {
@@ -609,6 +616,7 @@ class GameScene implements Scene {
     this.titlePrompt = this.label(640, 670, 34); this.titlePrompt.text = 'TOUCH TO START';
     this.titlePrompt.style.fill = 0xffffff; this.titlePrompt.eventMode = 'none';
     const begin = () => {
+      this.playSound('ui', 0.45); this.startBgm();
       this.titlePrompt = null; title.destroy({ children: true }); this.lobby = null;
       if (sessionStorage.getItem('limitless-intro-seen')) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
       else this.showIntro();
@@ -646,7 +654,7 @@ class GameScene implements Scene {
     this.lobby?.destroy({ children: true });
     const lobby = new Container(); lobby.zIndex = 3_000_000;
     const cover = new Graphics().rect(0, 0, W, H).fill({ color: 0x07101d, alpha: 0.94 });
-    const resume = () => { lobby.destroy({ children: true }); this.lobby = null; };
+    const resume = () => { this.playSound('ui', 0.45); this.startBgm(); lobby.destroy({ children: true }); this.lobby = null; };
     cover.eventMode = 'static'; cover.on('pointerdown', resume); lobby.addChild(cover);
     const heading = this.label(640, 105, 44); heading.text = title;
     const wallet = this.label(640, 160, 24); wallet.text = `UPGRADE POINTS · ${this.score}`;
@@ -670,7 +678,7 @@ class GameScene implements Scene {
       const card = new Graphics().roundRect(x - 155, 220, 310, 250, 22)
         .fill({ color, alpha: 0.65 }).stroke({ color: 0xffffff, width: 3, alpha: 0.55 });
       card.eventMode = 'static'; card.cursor = 'pointer';
-      card.on('pointerdown', () => this.buyUpgrade(key, title, keys));
+      card.on('pointerdown', () => { this.playSound('ui', 0.45); this.buyUpgrade(key, title, keys); });
       const nameText = this.label(x, 275, 31); nameText.text = name;
       const levelText = this.label(x, 338, 25); levelText.text = heal ? `HP ${this.hp}/${this.maxHp}` : `LEVEL ${level}/5`;
       const detailText = this.label(x, 390, 17); detailText.text = detail;
@@ -738,9 +746,11 @@ class GameScene implements Scene {
     retry.eventMode = home.eventMode = 'none';
     retry.cursor = home.cursor = 'pointer';
     retry.on('pointerdown', () => {
+      this.playSound('ui', 0.45);
       sessionStorage.setItem('limitless-retry', '1'); location.reload();
     });
     home.on('pointerdown', () => {
+      this.playSound('ui', 0.45);
       sessionStorage.removeItem('limitless-retry'); location.reload();
     });
     const retryText = this.label(485, 524, 26); retryText.text = 'RETRY';
@@ -767,6 +777,7 @@ class GameScene implements Scene {
     if (this.upgradeTimer) window.clearInterval(this.upgradeTimer);
     if (this.resultTimer) window.clearInterval(this.resultTimer);
     if (this.introTimer) window.clearInterval(this.introTimer);
+    this.audio.bgm?.pause();
   }
 
   private makeHud(): void {
@@ -810,6 +821,16 @@ class GameScene implements Scene {
     text.anchor.set(0.5); text.position.set(x, y); return text;
   }
 
+  private playSound(name: string, volume = 0.5): void {
+    const source = this.audio[name]; if (!source) return;
+    const sound = source.cloneNode() as HTMLAudioElement; sound.volume = volume;
+    void sound.play().catch(() => undefined);
+  }
+
+  private startBgm(): void {
+    void this.audio.bgm?.play().catch(() => undefined);
+  }
+
   private drawHud(): void {
     const duration = this.phase === 'night' ? NIGHT : DAY;
     const left = Math.max(0, Math.ceil((duration - this.elapsed) / 1000));
@@ -847,7 +868,9 @@ class GameScene implements Scene {
     };
     for (const a of this.people) if (!a.dead) dot(a.x, a.y, a.role === 'hunter' ? 0xff414d : 0xffffff);
     for (const a of this.infected) dot(a.x, a.y, 0x5fd35f);
-    if (this.hideout) dot(this.hideout.x, this.hideout.y, 0xffce47, 5);
+    if (this.hideout) dot(this.hideout.x, this.hideout.y,
+      this.hideout.kind === 'gold' ? 0xffd43b : this.hideout.kind === 'silver' ? 0x62d9ff : 0xff8b3d,
+      this.hideout.kind === 'gold' ? 9 : this.hideout.kind === 'silver' ? 8 : 7);
     dot(640, this.heroY, 0x39ff87, 5);
   }
 }
