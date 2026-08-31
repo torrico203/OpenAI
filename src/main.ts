@@ -110,6 +110,7 @@ class GameScene implements Scene {
   private transitionTimer = 0;
   private upgradeTimer = 0;
   private resultTimer = 0;
+  private introTimer = 0;
   private shakeFor = 0;
   private hitFlash!: Graphics;
   private minimap!: Graphics;
@@ -609,10 +610,36 @@ class GameScene implements Scene {
     this.titlePrompt.style.fill = 0xffffff; this.titlePrompt.eventMode = 'none';
     const begin = () => {
       this.titlePrompt = null; title.destroy({ children: true }); this.lobby = null;
-      this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+      if (sessionStorage.getItem('limitless-intro-seen')) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+      else this.showIntro();
     };
     hit.eventMode = 'static'; hit.cursor = 'pointer'; hit.on('pointerdown', begin);
     title.addChild(hit, this.titlePrompt); this.lobby = title; this.view.addChild(title);
+  }
+
+  private showIntro(): void {
+    sessionStorage.setItem('limitless-intro-seen', '1');
+    const intro = new Container(); intro.zIndex = 4_000_000;
+    const bg = new Graphics().rect(0, 0, W, H).fill(0x000000);
+    const textures = Object.fromEntries(['idle', 'walk', 'attack', 'damaged', 'death'].map((state) =>
+      [state, this.ctx.assets.get(`z_${state}`)])) as Record<ZombieState, Texture>;
+    const zombie = new ZombieView(textures, this.ctx.assets.get('shadow'));
+    const line = this.label(640, 580, 29); line.style.wordWrap = true; line.style.wordWrapWidth = 1050;
+    const story = '어느 날 눈을 뜨니 좀비였다.\n너무 쾌적한 좀비 인생, 더 많은 사람들이 누리게 도와줘야겠다.';
+    intro.addChild(bg, zombie.view, line); this.lobby = intro; this.view.addChild(intro);
+    let elapsed = 0;
+    this.introTimer = window.setInterval(() => {
+      elapsed += 30;
+      line.text = story.slice(0, Math.floor(elapsed / 55));
+      const jumping = elapsed >= 3900, jump = jumping && elapsed < 4800
+        ? Math.sin((elapsed - 3900) / 900 * Math.PI) * 150 : 0;
+      zombie.sync(640, 475 - jump, 1, jumping ? 'walk' : 'idle', 30, jumping ? 0 : 1);
+      zombie.view.zIndex = 1;
+      if (elapsed < 4800) return;
+      window.clearInterval(this.introTimer); this.introTimer = 0;
+      intro.destroy({ children: true }); this.lobby = null;
+      this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+    }, 30);
   }
 
   private showLobby(title: string, selected?: UpgradeKey[]): void {
@@ -739,6 +766,7 @@ class GameScene implements Scene {
     if (this.transitionTimer) window.clearInterval(this.transitionTimer);
     if (this.upgradeTimer) window.clearInterval(this.upgradeTimer);
     if (this.resultTimer) window.clearInterval(this.resultTimer);
+    if (this.introTimer) window.clearInterval(this.introTimer);
   }
 
   private makeHud(): void {
