@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: process.env.GITHUB_ACTIONS ? '/OpenAI/' : '/',
+  base: process.env.VITE_BASE ?? '/',
   resolve: { dedupe: ['pixi.js'] },
 });
