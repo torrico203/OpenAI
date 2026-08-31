@@ -106,6 +106,9 @@ class GameScene implements Scene {
   private attackText!: Text;
   private lobby: Container | null = null;
   private titlePrompt: Text | null = null;
+  private titleView: Container | null = null;
+  private assetsReady = false;
+  private startRequested = false;
   private titlePulse = 0;
   private transitionTimer = 0;
   private upgradeTimer = 0;
@@ -150,6 +153,7 @@ class GameScene implements Scene {
     await ctx.assets.load({
       loadingCat: assetUrl('assets/loading/cat_walk.png'),
       loadingCopycat: assetUrl('assets/loading/copycat_walk.png'),
+      titleScreen: assetUrl('assets/title/title-screen.jpg'),
     });
     const catTex = ctx.assets.get('loadingCat'), copyTex = ctx.assets.get('loadingCopycat');
     const cat = new Sprite(), copycat = new Sprite(); cat.anchor.set(0.5); copycat.anchor.set(0.5);
@@ -164,6 +168,14 @@ class GameScene implements Scene {
       cat.x -= 18; copycat.x -= 18;
       if (cat.x < -180) { cat.x = 1350; copycat.x = 1590; }
     }, 90);
+    for (const name of ['bgm', 'infect', 'hurt', 'ui', 'slide', 'dash']) {
+      const sound = new Audio(assetUrl(`assets/audio/${name}.mp3`)); sound.preload = 'auto';
+      this.audio[name] = sound;
+    }
+    this.audio.bgm!.loop = true; this.audio.bgm!.volume = 0.22;
+    if (!this.skipTitle) {
+      window.clearInterval(loadingTimer); loading.destroy({ children: true }); this.showTitle();
+    }
     this.rig = await fetch(assetUrl('assets/player/rig/rig.json')).then((r) => r.json()) as RigManifest;
     const manifest: Record<string, string> = {
       far: assetUrl('assets/field/far.png'), mid: assetUrl('assets/field/mid.png'),
@@ -172,7 +184,6 @@ class GameScene implements Scene {
       panel: assetUrl('assets/ui/panel.png'), track: assetUrl('assets/ui/gauge_track.png'),
       fill: assetUrl('assets/ui/gauge_fill.png'), moon: assetUrl('assets/ui/menu_night.png'),
       joyBase: assetUrl('assets/ui/joy_base.png'), joyKnob: assetUrl('assets/ui/joy_knob.png'),
-      titleScreen: assetUrl('assets/title/title-screen.jpg'),
       hideoutBronze: assetUrl('assets/hideout/bronze.png'), hideoutSilver: assetUrl('assets/hideout/silver.png'),
       hideoutGold: assetUrl('assets/hideout/gold.png'),
     };
@@ -184,15 +195,12 @@ class GameScene implements Scene {
         manifest[`infected_${kind}_${state}`] = assetUrl(`assets/infected/${kind}/${state}.png`);
     await ctx.assets.load(manifest, ({ loaded, total }) => {
       const ratio = loaded / total;
-      bar.clear().roundRect(392, 567, 496 * ratio, 12, 6).fill(0xe54858);
-      loadingText.text = `LOADING ${Math.round(ratio * 100)}%`;
+      if (this.skipTitle) {
+        bar.clear().roundRect(392, 567, 496 * ratio, 12, 6).fill(0xe54858);
+        loadingText.text = `LOADING ${Math.round(ratio * 100)}%`;
+      } else if (this.startRequested && this.titlePrompt) this.titlePrompt.text = `LOADING ${Math.round(ratio * 100)}%`;
     });
-    for (const name of ['bgm', 'infect', 'hurt', 'ui', 'slide', 'dash']) {
-      const sound = new Audio(assetUrl(`assets/audio/${name}.mp3`)); sound.preload = 'auto';
-      this.audio[name] = sound;
-    }
-    this.audio.bgm!.loop = true; this.audio.bgm!.volume = 0.22;
-    window.clearInterval(loadingTimer); loading.destroy({ children: true });
+    if (this.skipTitle) { window.clearInterval(loadingTimer); loading.destroy({ children: true }); }
 
     const theme = Math.floor(Math.random() * 3);
     const layers = theme === 0 ? [['far', 0.25, -300], ['mid', 0.55, -200], ['near', 1, -100]] as const
@@ -214,7 +222,9 @@ class GameScene implements Scene {
     this.spawnCitizens();
     this.spawnHideout();
     this.drawHud();
-    if (this.skipTitle) this.showLobby('NIGHT 1 · THE HUNT BEGINS'); else this.showTitle();
+    this.assetsReady = true;
+    if (this.skipTitle) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+    else if (this.startRequested) this.startFromTitle();
   }
 
   update(dt: number): void {
@@ -223,6 +233,7 @@ class GameScene implements Scene {
         this.titlePulse += dt;
         this.titlePrompt.alpha = 0.45 + Math.sin(this.titlePulse / 260) * 0.35;
       }
+      if (!this.assetsReady) return;
       this.hero.sync(640, this.heroY, this.facing, 'idle', dt);
       this.drawHud();
       return;
@@ -619,6 +630,7 @@ class GameScene implements Scene {
 
   private showTitle(): void {
     const title = new Container(); title.zIndex = 4_000_000;
+    this.titleView = title;
     const art = new Sprite(this.ctx.assets.get('titleScreen'));
     art.width = W; art.height = H; title.addChild(art);
     const hit = new Graphics().rect(0, 0, W, H).fill({ color: 0x000000, alpha: 0.001 });
@@ -626,12 +638,19 @@ class GameScene implements Scene {
     this.titlePrompt.style.fill = 0xffffff; this.titlePrompt.eventMode = 'none';
     const begin = () => {
       this.playSound('ui', 0.45); this.startBgm();
-      this.titlePrompt = null; title.destroy({ children: true }); this.lobby = null;
-      if (sessionStorage.getItem('limitless-intro-seen')) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
-      else this.showIntro();
+      this.startFromTitle();
     };
     hit.eventMode = 'static'; hit.cursor = 'pointer'; hit.on('pointerdown', begin);
     title.addChild(hit, this.titlePrompt); this.lobby = title; this.view.addChild(title);
+  }
+
+  private startFromTitle(): void {
+    if (!this.assetsReady) {
+      this.startRequested = true; if (this.titlePrompt) this.titlePrompt.text = 'LOADING...'; return;
+    }
+    this.titlePrompt = null; this.titleView?.destroy({ children: true }); this.titleView = null; this.lobby = null;
+    if (sessionStorage.getItem('limitless-intro-seen')) this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+    else this.showIntro();
   }
 
   private showIntro(): void {
