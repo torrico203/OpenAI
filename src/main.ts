@@ -108,6 +108,7 @@ class GameScene implements Scene {
   private titlePrompt: Text | null = null;
   private titlePulse = 0;
   private transitionTimer = 0;
+  private upgradeTimer = 0;
   private shakeFor = 0;
   private hitFlash!: Graphics;
   private minimap!: Graphics;
@@ -343,13 +344,13 @@ class GameScene implements Scene {
       a.dashFor = Math.max(0, a.dashFor - dt); a.dashCooldown -= dt;
       if (danger < 240 && a.dashCooldown <= 0) {
         a.dashFor = 420; a.dashCooldown = 6000 + Math.random() * 3000;
-        const side = Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? -1 : 1;
+        const side = a.y < 370 ? 1 : a.y > H - 105 ? -1 : Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? 1 : -1;
         const ex = dx / (danger || 1), ey = dy / (danger || 1) + side * 0.65, el = Math.hypot(ex, ey) || 1;
         a.vx = ex / el * 470; a.vy = ey / el * 470;
       }
       if (danger < 300) {
         const len = danger || 1;
-        const dodgeY = Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? -1 : 1;
+        const dodgeY = a.y < 370 ? 1 : a.y > H - 105 ? -1 : Math.abs(dy) > 24 ? Math.sign(dy) : a.y < 500 ? 1 : -1;
         a.vx += dx / len * 430 * dt / 1000;
         a.vy += (dy / len * 280 + dodgeY * 210) * dt / 1000;
       } else if (Math.random() < 0.008) {
@@ -359,7 +360,7 @@ class GameScene implements Scene {
         cap = a.dashFor ? 470 : a.panicFor ? 390 : danger < 300 ? 210 : 80;
       if (speed > cap) { a.vx *= cap / speed; a.vy *= cap / speed; }
       a.x += a.vx * dt / 1000; a.y += a.vy * dt / 1000;
-      if (a.y < 300 || a.y > H - 35) a.vy *= -1;
+      if (a.y < 300 || a.y > H - 35) { a.y = Math.max(300, Math.min(H - 35, a.y)); a.vy *= -0.7; }
       a.facing = a.vx < 0 ? -1 : 1; a.moving = true;
       a.doll.view.alpha = a.safeFor ? (Math.floor(a.safeFor / 90) % 2 ? 0.22 : 1) : 1;
       a.doll.sync(a, dt);
@@ -648,11 +649,33 @@ class GameScene implements Scene {
   private buyUpgrade(key: UpgradeKey, title: string, selected: UpgradeKey[]): void {
     if (key === 'heal') {
       if (this.hp >= this.maxHp || this.score < 200) return;
-      this.score -= 200; this.hp++; this.showLobby(title, selected); this.drawHud(); return;
+      this.score -= 200; this.hp++; this.showLobby(title, selected); this.upgradeFx(); this.drawHud(); return;
     }
     const level = this.upgrades[key], cost = 200 * (level + 1);
     if (level >= 5 || this.score < cost) return;
-    this.score -= cost; this.upgrades[key]++; this.showLobby(title, selected); this.drawHud();
+    this.score -= cost; this.upgrades[key]++; this.showLobby(title, selected); this.upgradeFx(); this.drawHud();
+  }
+
+  private upgradeFx(): void {
+    if (!this.lobby) return;
+    window.clearInterval(this.upgradeTimer);
+    const fx = new Container();
+    const rays = new Graphics();
+    for (let i = 0; i < 16; i++) {
+      const a = Math.PI * 2 * i / 16;
+      rays.circle(Math.cos(a) * 72, Math.sin(a) * 72, 7).fill(0xffef78);
+    }
+    rays.circle(0, 0, 48).stroke({ color: 0xffffff, width: 7 });
+    const text = this.label(0, 0, 27); text.text = 'UPGRADED!';
+    fx.position.set(640, 190); fx.addChild(rays, text); this.lobby.addChild(fx);
+    let elapsed = 0;
+    this.upgradeTimer = window.setInterval(() => {
+      elapsed += 30;
+      if (fx.destroyed) { window.clearInterval(this.upgradeTimer); this.upgradeTimer = 0; return; }
+      fx.scale.set(0.75 + elapsed / 900); fx.alpha = Math.max(0, 1 - elapsed / 600);
+      if (elapsed < 600) return;
+      window.clearInterval(this.upgradeTimer); this.upgradeTimer = 0; fx.destroy({ children: true });
+    }, 30);
   }
 
   private finish(win: boolean): void {
@@ -669,8 +692,12 @@ class GameScene implements Scene {
     const home = new Graphics().roundRect(660, 485, 270, 78, 16).fill(0x263b59).stroke({ color: 0xffffff, width: 3 });
     retry.zIndex = home.zIndex = 2_000_001; retry.eventMode = home.eventMode = 'static';
     retry.cursor = home.cursor = 'pointer';
-    retry.on('pointerdown', () => void this.ctx.scenes.change(new GameScene(true)));
-    home.on('pointerdown', () => void this.ctx.scenes.change(new GameScene()));
+    retry.on('pointerdown', () => {
+      sessionStorage.setItem('limitless-retry', '1'); location.reload();
+    });
+    home.on('pointerdown', () => {
+      sessionStorage.removeItem('limitless-retry'); location.reload();
+    });
     const retryText = this.label(485, 524, 26); retryText.text = 'RETRY';
     const homeText = this.label(795, 524, 26); homeText.text = 'TITLE';
     retryText.zIndex = homeText.zIndex = 2_000_002; retryText.eventMode = homeText.eventMode = 'none';
@@ -679,6 +706,7 @@ class GameScene implements Scene {
 
   onExit(): void {
     if (this.transitionTimer) window.clearInterval(this.transitionTimer);
+    if (this.upgradeTimer) window.clearInterval(this.upgradeTimer);
   }
 
   private makeHud(): void {
@@ -749,7 +777,7 @@ class GameScene implements Scene {
   }
 
   private drawMinimap(): void {
-    const map = this.minimap, x = 20, y = 570, w = 200, h = 125;
+    const map = this.minimap, x = 20, y = 72, w = 200, h = 125;
     map.clear().roundRect(x, y, w, h, 10).fill({ color: 0x02060c, alpha: 0.72 })
       .roundRect(x, y, w, h, 10).stroke({ color: 0x8ca0b8, width: 2, alpha: 0.7 });
     const dot = (px: number, py: number, color: number, radius = 3): void => {
@@ -768,6 +796,8 @@ async function main(): Promise<void> {
   const parent = document.querySelector<HTMLElement>('#app');
   if (!parent) throw new Error('#app not found');
   const engine = await createEngine({ parent, design: { width: W, height: H }, background: 0x111827 });
-  await engine.start(new GameScene());
+  const retry = sessionStorage.getItem('limitless-retry') === '1';
+  sessionStorage.removeItem('limitless-retry');
+  await engine.start(new GameScene(retry));
 }
 void main();
