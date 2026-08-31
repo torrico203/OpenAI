@@ -38,7 +38,7 @@ class ZombieView {
     this.view.addChild(shade, this.sprite);
   }
 
-  sync(x: number, y: number, facing: number, state: ZombieState, dt: number, sliding = false): void {
+  sync(x: number, y: number, facing: number, state: ZombieState, dt: number, slidePose = 0): void {
     if (state !== this.state) { this.state = state; this.frame = 0; this.elapsed = 0; }
     const looping = state === 'idle' || state === 'walk';
     const duration = state === 'attack' ? 70 : state === 'walk' ? 90 : 100;
@@ -49,8 +49,8 @@ class ZombieView {
     }
     this.sprite.texture = this.frames[state][this.frame]!;
     this.sprite.scale.x = this.scale * facing * -1;
-    this.sprite.scale.y = this.scale * (sliding ? 0.62 : 1);
-    this.sprite.rotation = sliding ? -0.18 * facing : 0;
+    this.sprite.scale.y = this.scale;
+    this.sprite.rotation = -Math.PI / 2 * facing * slidePose;
     this.view.position.set(x, y);
     this.view.zIndex = Math.round(y);
   }
@@ -87,6 +87,8 @@ class GameScene implements Scene {
   private dashCooldown = 0;
   private rollText!: Text;
   private dashText!: Text;
+  private rollButton!: Graphics;
+  private dashButton!: Graphics;
   private lobby: Container | null = null;
   private upgrades = { run: 0, slide: 0, dash: 0 };
   private phaseText!: Text;
@@ -139,20 +141,23 @@ class GameScene implements Scene {
   }
 
   update(dt: number): void {
-    this.attackFor = Math.max(0, this.attackFor - dt);
-    this.hurtFor = Math.max(0, this.hurtFor - dt);
-    this.cooldown = Math.max(0, this.cooldown - dt);
-    this.rollFor = Math.max(0, this.rollFor - dt);
-    this.rollCooldown = Math.max(0, this.rollCooldown - dt);
-    this.dashFor = Math.max(0, this.dashFor - dt);
-    this.dashCooldown = Math.max(0, this.dashCooldown - dt);
-    this.updateBullets(dt);
-    this.updateEffects(dt);
     if (this.lobby) {
       this.hero.sync(640, this.heroY, this.facing, 'idle', dt);
       this.drawHud();
       return;
     }
+    this.attackFor = Math.max(0, this.attackFor - dt);
+    this.hurtFor = Math.max(0, this.hurtFor - dt);
+    this.cooldown = Math.max(0, this.cooldown - dt);
+    this.rollFor = Math.max(0, this.rollFor - dt);
+    const rollWasCooling = this.rollCooldown > 0, dashWasCooling = this.dashCooldown > 0;
+    this.rollCooldown = Math.max(0, this.rollCooldown - dt);
+    this.dashFor = Math.max(0, this.dashFor - dt);
+    this.dashCooldown = Math.max(0, this.dashCooldown - dt);
+    if (rollWasCooling && !this.rollCooldown) this.readyFx(1050, 590, 0x9defff);
+    if (dashWasCooling && !this.dashCooldown) this.readyFx(1170, 590, 0xffd49d);
+    this.updateBullets(dt);
+    this.updateEffects(dt);
     if (this.ended) {
       this.hero.sync(640, this.heroY, this.facing, this.dead ? 'death' : 'idle', dt);
       return;
@@ -163,7 +168,7 @@ class GameScene implements Scene {
     if (this.elapsed >= (this.phase === 'night' ? NIGHT : DAY)) this.swapPhase();
     const state: ZombieState = this.dead ? 'death' : this.hurtFor ? 'damaged'
       : this.attackFor ? 'attack' : this.moving ? 'walk' : 'idle';
-    this.hero.sync(640, this.heroY, this.facing, state, dt, this.rollFor > 0);
+    this.hero.sync(640, this.heroY, this.facing, state, dt, Math.min(1, this.rollFor / 130));
     this.drawHud();
   }
 
@@ -358,6 +363,12 @@ class GameScene implements Scene {
     }
   }
 
+  private readyFx(x: number, y: number, color: number): void {
+    this.burst(x, y, color, 14);
+    const fx = this.effects[this.effects.length - 1];
+    if (fx) fx.view.zIndex = 1_100_000;
+  }
+
   private useRoll(): void {
     if (this.rollCooldown || this.ended) return;
     this.rollFor = 440 + this.upgrades.slide * 60;
@@ -462,10 +473,12 @@ class GameScene implements Scene {
     const roll = new Graphics().circle(1050, 590, 54).fill({ color: 0x197b9b, alpha: 0.9 })
       .circle(1050, 590, 48).stroke({ color: 0x9defff, width: 4 });
     roll.eventMode = 'static'; roll.cursor = 'pointer'; roll.on('pointerdown', () => this.useRoll());
+    this.rollButton = roll;
     this.rollText = this.label(1050, 590, 18); this.rollText.text = 'SLIDE';
     const dash = new Graphics().circle(1170, 590, 54).fill({ color: 0x9b4b19, alpha: 0.9 })
       .circle(1170, 590, 48).stroke({ color: 0xffd49d, width: 4 });
     dash.eventMode = 'static'; dash.cursor = 'pointer'; dash.on('pointerdown', () => this.useDash());
+    this.dashButton = dash;
     this.dashText = this.label(1170, 590, 18); this.dashText.text = 'DASH';
     const hud = [panel, this.moon, this.sun, this.phaseText, this.timer, track, this.fill,
       this.scoreText, this.status, help, roll, this.rollText, dash, this.dashText, this.joyBase, this.joyKnob];
@@ -493,6 +506,10 @@ class GameScene implements Scene {
       : `${hunters} HUNTERS  ·  SURVIVE UNTIL SUNSET`;
     this.rollText.text = this.rollCooldown ? `SLIDE\n${(this.rollCooldown / 1000).toFixed(1)}` : 'SLIDE';
     this.dashText.text = this.dashCooldown ? `DASH\n${(this.dashCooldown / 1000).toFixed(1)}` : 'DASH';
+    this.rollButton.alpha = this.rollCooldown ? 0.3 : 1;
+    this.dashButton.alpha = this.dashCooldown ? 0.3 : 1;
+    this.rollText.alpha = this.rollCooldown ? 0.38 : 1;
+    this.dashText.alpha = this.dashCooldown ? 0.38 : 1;
   }
 }
 
