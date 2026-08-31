@@ -108,6 +108,29 @@ class GameScene implements Scene {
 
   async onEnter(ctx: EngineContext): Promise<void> {
     this.ctx = ctx;
+    this.view.sortableChildren = true;
+    const loading = new Container(); loading.zIndex = 5_000_000;
+    const loadingBg = new Graphics().rect(0, 0, W, H).fill(0x08111f);
+    const loadingTitle = this.label(640, 205, 46); loadingTitle.text = 'GO LIMITLESS';
+    const loadingText = this.label(640, 535, 21); loadingText.text = 'LOADING 0%';
+    const track = new Graphics().roundRect(390, 565, 500, 16, 8).fill(0x1b2b43);
+    const bar = new Graphics(); loading.addChild(loadingBg, loadingTitle, loadingText, track, bar);
+    this.view.addChild(loading);
+    await ctx.assets.load({
+      loadingCat: assetUrl('assets/loading/cat_walk.png'),
+      loadingCopycat: assetUrl('assets/loading/copycat_walk.png'),
+    });
+    const catTex = ctx.assets.get('loadingCat'), copyTex = ctx.assets.get('loadingCopycat');
+    const cat = new Sprite(), copycat = new Sprite(); cat.anchor.set(0.5); copycat.anchor.set(0.5);
+    cat.scale.set(0.9); copycat.scale.set(0.32); cat.position.set(545, 450); copycat.position.set(710, 425);
+    loading.addChild(cat, copycat);
+    let loadingFrame = 0;
+    const loadingTimer = window.setInterval(() => {
+      const frame = loadingFrame++ % 8;
+      cat.texture = new Texture({ source: catTex.source, frame: new Rectangle(frame * 150, 0, 150, 150) });
+      copycat.texture = new Texture({ source: copyTex.source,
+        frame: new Rectangle(frame % 4 * 400, Math.floor(frame / 4) * 400, 400, 400) });
+    }, 90);
     this.rig = await fetch(assetUrl('assets/player/rig/rig.json')).then((r) => r.json()) as RigManifest;
     const manifest: Record<string, string> = {
       far: assetUrl('assets/field/far.png'), mid: assetUrl('assets/field/mid.png'),
@@ -115,6 +138,9 @@ class GameScene implements Scene {
       panel: assetUrl('assets/ui/panel.png'), track: assetUrl('assets/ui/gauge_track.png'),
       fill: assetUrl('assets/ui/gauge_fill.png'), moon: assetUrl('assets/ui/menu_night.png'),
       joyBase: assetUrl('assets/ui/joy_base.png'), joyKnob: assetUrl('assets/ui/joy_knob.png'),
+      titleBg: assetUrl('assets/title/main-bg.png'), titleLogo: assetUrl('assets/title/logo.png'),
+      titleBack: assetUrl('assets/title/title_back_zombie.png'), titleActor: assetUrl('assets/title/title_actor.png'),
+      titleFore: assetUrl('assets/title/title_fore_zombie.png'), titleFront: assetUrl('assets/title/title_front_zombie.png'),
     };
     for (let i = 0; i < 8; i++) manifest[`pd_atlas_${i}`] = assetUrl(`assets/player/rig/atlas-${i}.png`);
     for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
@@ -122,9 +148,13 @@ class GameScene implements Scene {
     for (const kind of ['citizen', 'student', 'police', 'doctor'])
       for (const state of ['idle', 'walk', 'attack', 'damaged', 'death'])
         manifest[`infected_${kind}_${state}`] = assetUrl(`assets/infected/${kind}/${state}.png`);
-    await ctx.assets.load(manifest);
+    await ctx.assets.load(manifest, ({ loaded, total }) => {
+      const ratio = loaded / total;
+      bar.clear().roundRect(392, 567, 496 * ratio, 12, 6).fill(0xe54858);
+      loadingText.text = `LOADING ${Math.round(ratio * 100)}%`;
+    });
+    window.clearInterval(loadingTimer); loading.destroy({ children: true });
 
-    this.view.sortableChildren = true;
     for (const [alias, effect, z] of [['far', 0.25, -300], ['mid', 0.55, -200], ['near', 1, -100]] as const) {
       const texture = ctx.assets.get(alias);
       const sprite = new TilingSprite({ texture, width: W, height: H });
@@ -139,7 +169,7 @@ class GameScene implements Scene {
     this.makeHud();
     this.spawnCitizens();
     this.drawHud();
-    this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+    this.showTitle();
   }
 
   update(dt: number): void {
@@ -406,6 +436,28 @@ class GameScene implements Scene {
     else {
       this.day++; this.phase = 'night'; this.spawnCitizens(); this.showLobby(`NIGHT ${this.day} · HUNT`);
     }
+  }
+
+  private showTitle(): void {
+    const title = new Container(); title.zIndex = 4_000_000;
+    for (const alias of ['titleBg', 'titleBack', 'titleActor', 'titleFore', 'titleFront']) {
+      const sprite = new Sprite(this.ctx.assets.get(alias));
+      const scale = Math.max(W / sprite.texture.width, H / sprite.texture.height);
+      sprite.anchor.set(0.5); sprite.position.set(W / 2, H / 2); sprite.scale.set(scale);
+      title.addChild(sprite);
+    }
+    title.addChild(new Graphics().rect(0, 0, W, H).fill({ color: 0x050912, alpha: 0.42 }));
+    const name = this.label(640, 210, 72); name.text = 'LIMITLESS ZOMBIE';
+    name.style.fill = 0xffe8dc; name.style.stroke = { color: 0x4b0710, width: 10 };
+    const tag = this.label(640, 290, 24); tag.text = 'BITE BY NIGHT · RUN BY DAY';
+    const start = new Graphics().roundRect(490, 490, 300, 86, 20)
+      .fill(0xd73547).stroke({ color: 0xffffff, width: 4 });
+    const startText = this.label(640, 533, 31); startText.text = 'START GAME'; startText.eventMode = 'none';
+    const begin = () => {
+      title.destroy({ children: true }); this.lobby = null; this.showLobby('NIGHT 1 · THE HUNT BEGINS');
+    };
+    start.eventMode = 'static'; start.cursor = 'pointer'; start.on('pointerdown', begin);
+    title.addChild(name, tag, start, startText); this.lobby = title; this.view.addChild(title);
   }
 
   private showLobby(title: string): void {
